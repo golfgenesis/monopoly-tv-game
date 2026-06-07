@@ -9,8 +9,15 @@ export interface ServerToClientEvents {
 
 export interface ClientToServerEvents {
   createRoom: () => void;
-  joinRoom: (payload: { roomCode: string; name: string; token: string; color: string }) => void;
+  joinRoom: (payload: {
+    roomCode: string;
+    name: string;
+    token: string;
+    color: string;
+    avatar: string;
+  }) => void;
   hostStartGame: (payload: { roomCode: string }) => void;
+  hostResetGame: (payload: { roomCode: string }) => void;
   playerAction: (payload: { roomCode: string; playerId: string; action: GameAction }) => void;
 }
 
