@@ -1,0 +1,22 @@
+{
+  "name": "monopoly-tv-game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,tv,phone -c cyan,yellow,green \"npm run dev --workspace @siamsetthi/server\" \"npm run dev --workspace @siamsetthi/tv\" \"npm run dev --workspace @siamsetthi/phone\"",
+    "test": "npm run test --workspace @siamsetthi/rules",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "concurrently": "^9.2.1",
+    "playwright": "^1.60.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

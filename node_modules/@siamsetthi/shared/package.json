@@ -1,0 +1,13 @@
+{
+  "name": "@siamsetthi/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@siamsetthi/rules": "0.1.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@siamsetthi/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@siamsetthi/rules": "0.1.0",
+    "@siamsetthi/shared": "0.1.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.1",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6"
+  }
+}
