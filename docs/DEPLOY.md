@@ -61,6 +61,42 @@ sudo ufw allow 5173,5174,4000/tcp
 
 ---
 
+## 🔄 Auto-Deploy (push แล้วอัปเดตเองบน Ubuntu)
+
+ตั้งให้เครื่อง Ubuntu **poll `origin/main` ทุก 5 นาที** เจอ commit ใหม่ก็ `git pull` + `docker compose up -d --build` ให้เองผ่าน **systemd timer** (แพตเทิร์นเดียวกับงาน `f:\home`)
+
+### ติดตั้งครั้งเดียว
+```bash
+cd /path/to/monopoly-tv-game
+git remote add origin <your-repo-url>   # ถ้ายังไม่มี remote
+sudo bash scripts/install-auto-deploy.sh
+```
+
+ตั้งแต่นั้น: แก้โค้ดบนเครื่อง dev → `git push` → ภายใน ~5 นาที เครื่องที่บ้าน pull + build + รันเวอร์ชันใหม่ให้เอง
+
+### คำสั่งจัดการ
+```bash
+sudo bash scripts/install-auto-deploy.sh --status      # ดูสถานะ timer + log ล่าสุด
+sudo bash scripts/install-auto-deploy.sh --now         # สั่ง deploy ทันที (ทดสอบ)
+sudo bash scripts/install-auto-deploy.sh --interval=10 # เปลี่ยนเป็นทุก 10 นาที
+sudo bash scripts/install-auto-deploy.sh --uninstall   # ถอนออก
+tail -f scripts/auto-deploy.log                        # ดู log การ deploy
+journalctl -u siamsetthi-auto-deploy.service -f        # มุมมองของ systemd
+```
+
+### มันทำงานยังไง / กันพังยังไง
+- `scripts/auto-deploy.sh` = ตัว poll: `git fetch` → ถ้า HEAD ตรง origin แล้วก็ออกเงียบๆ
+- **ปลอดภัย:** ข้าม deploy ถ้า working tree สกปรก หรือ local อยู่ "ahead" (กัน pull ทับงานที่ยังไม่ push)
+- **ไม่ซ้อน:** มี lock file กัน timer ยิงซ้ำตอน build ยังรัน (ค้างเกิน 30 นาทีถือว่า stale แล้วล้าง)
+- pull แบบ `--ff-only` เท่านั้น (ไม่ merge มั่ว) + log หมุนที่ 5 MB
+- deploy ด้วย `docker compose up -d --build` โดยปริยาย — เปลี่ยนได้ด้วย env `AUTO_DEPLOY_CMD`
+
+### ข้อกำหนด
+- ผู้ใช้ที่เป็นเจ้าของโฟลเดอร์ repo ต้องอยู่กลุ่ม `docker`: `sudo usermod -aG docker $USER` (แล้ว logout/login) — installer จะเตือนให้ถ้ายังไม่ได้ตั้ง
+- ต้องมี `origin/main` (ถ้า repo private ให้ตั้ง SSH key / deploy key ให้ผู้ใช้นั้น เพราะ timer pull ในนามผู้ใช้คนนั้น)
+
+---
+
 ## 🅰️ ตัวเลือก A — เล่นในบ้าน (LAN) แบบไม่ใช้ Docker
 
 เหมาะถ้าไม่อยากลง Docker เร็วสุด ฟรี ไม่ต้องใช้อินเทอร์เน็ต

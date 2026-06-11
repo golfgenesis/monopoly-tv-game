@@ -25,6 +25,8 @@ Dev ports: TV `5173`, phone `5174`, server `4000`. This is **npm workspaces**, n
 
 **Docker (LAN one-shot):** `docker compose up -d --build` runs all three in one container (`Dockerfile` + `scripts/docker-start.sh` + dep-free `scripts/static.mjs` serving the built frontends; server via `tsx`). No env needed — frontends resolve the server from `window.location.hostname:4000`.
 
+**Auto-deploy:** `scripts/auto-deploy.sh` (git-poll → pull → redeploy) + `scripts/install-auto-deploy.sh` (systemd service+timer, unit name `siamsetthi-auto-deploy`). Same pattern as the `f:\home` project. Lock + log-rotate + dirty/ahead safety guards. Deploy step defaults to `docker compose up -d --build`, override with `AUTO_DEPLOY_CMD`.
+
 ## Architecture
 
 | Path | Package | Role |
