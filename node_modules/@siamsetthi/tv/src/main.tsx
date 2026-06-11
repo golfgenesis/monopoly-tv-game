@@ -1,30 +1,184 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import { io, type Socket } from "socket.io-client";
 import {
   Banknote,
   BookOpen,
+  Bot,
   Building2,
   Crown,
   Hammer,
   History,
   Home,
   Landmark,
+  Minus,
   Play,
+  Plus,
   Repeat,
   RotateCcw,
   Settings,
   Sparkles,
   Timer,
   Users,
-  X
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
+  X,
+  Zap
 } from "lucide-react";
 import { BOARD, GROUPS, type GameState, type OwnableTile, type Player, type Tile } from "@siamsetthi/rules";
 import type { ClientToServerEvents, ServerToClientEvents } from "@siamsetthi/shared";
 import "./styles.css";
 
 const serverUrl = import.meta.env.VITE_SERVER_URL ?? `http://${window.location.hostname}:4000`;
+
+/* ----------------------------- TV stage scaling --------------------------- */
+
+// The whole TV UI is authored at a fixed 1920×1080 design canvas and scaled
+// uniformly to fill the screen. This keeps the layout identical and crisp on a
+// 1080p preview, a 4K 75" TV, and a desktop browser, and makes couch-distance
+// readability predictable. `zoom` (< 1) pulls content inward on TVs that overscan.
+const DESIGN_W = 1920;
+const DESIGN_H = 1080;
+
+function useStageScale(zoom: number): number {
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const compute = () => {
+      const fit = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
+      setScale(fit * zoom);
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [zoom]);
+  return scale;
+}
+
+/* ------------------------------ settings store ---------------------------- */
+
+interface TvSettings {
+  sound: boolean;
+  motion: boolean;
+  /** Overscan compensation: 0.85–1.0 of fitted scale. */
+  zoom: number;
+}
+const SETTINGS_KEY = "siamsetthi.tv.settings";
+const DEFAULT_SETTINGS: TvSettings = { sound: true, motion: true, zoom: 0.98 };
+
+function loadSettings(): TvSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<TvSettings>) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+function saveSettings(s: TvSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+}
+
+/* -------------------------------- audio fx -------------------------------- */
+
+// Tiny synthesized stinger engine — no asset files, retro arcade blips that
+// suit the 90s toy-box mood. All sounds are gated behind the sound setting.
+type Stinger = "dice" | "buy" | "rent" | "card" | "jail" | "win" | "turn" | "bust";
+
+const audio = (() => {
+  let ctx: AudioContext | null = null;
+  let enabled = true;
+
+  function ensure(): AudioContext | null {
+    if (typeof window === "undefined") return null;
+    if (!ctx) {
+      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctor) return null;
+      ctx = new Ctor();
+    }
+    if (ctx.state === "suspended") void ctx.resume();
+    return ctx;
+  }
+
+  function tone(freq: number, start: number, dur: number, type: OscillatorType, gain: number): void {
+    const ac = ctx;
+    if (!ac) return;
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ac.currentTime + start);
+    g.gain.setValueAtTime(0.0001, ac.currentTime + start);
+    g.gain.exponentialRampToValueAtTime(gain, ac.currentTime + start + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + start + dur);
+    osc.connect(g).connect(ac.destination);
+    osc.start(ac.currentTime + start);
+    osc.stop(ac.currentTime + start + dur + 0.02);
+  }
+
+  const recipes: Record<Stinger, () => void> = {
+    dice: () => {
+      for (let i = 0; i < 4; i += 1) tone(180 + i * 20, i * 0.05, 0.05, "square", 0.12);
+    },
+    buy: () => {
+      tone(523, 0, 0.1, "triangle", 0.18);
+      tone(784, 0.09, 0.16, "triangle", 0.18);
+    },
+    rent: () => {
+      tone(330, 0, 0.12, "sawtooth", 0.14);
+      tone(247, 0.1, 0.18, "sawtooth", 0.14);
+    },
+    card: () => {
+      tone(660, 0, 0.08, "sine", 0.16);
+      tone(880, 0.08, 0.14, "sine", 0.16);
+    },
+    jail: () => {
+      tone(196, 0, 0.18, "sawtooth", 0.16);
+      tone(147, 0.16, 0.26, "sawtooth", 0.16);
+    },
+    bust: () => {
+      tone(220, 0, 0.2, "sawtooth", 0.18);
+      tone(165, 0.18, 0.22, "sawtooth", 0.18);
+      tone(110, 0.36, 0.4, "sawtooth", 0.18);
+    },
+    turn: () => tone(587, 0, 0.1, "triangle", 0.12),
+    win: () => {
+      const notes = [523, 659, 784, 1047];
+      notes.forEach((n, i) => tone(n, i * 0.13, 0.22, "triangle", 0.2));
+    }
+  };
+
+  return {
+    setEnabled(v: boolean) {
+      enabled = v;
+    },
+    unlock() {
+      ensure();
+    },
+    play(name: Stinger) {
+      if (!enabled) return;
+      if (!ensure()) return;
+      recipes[name]();
+    }
+  };
+})();
+
+/** Map a game log tone/keyword to a stinger. */
+function stingerForEvent(message: string, tone: string): Stinger | null {
+  if (/ล้มละลาย/.test(message)) return "bust";
+  if (/คุก/.test(message)) return "jail";
+  if (/ซื้อ|ชนะประมูล/.test(message)) return "buy";
+  if (/ค่าเช่า|เสีย|จ่าย/.test(message)) return "rent";
+  if (/การ์ด/.test(message)) return "card";
+  if (/เศรษฐีที่ยิ่งใหญ่/.test(message)) return "win";
+  if (tone === "turn") return "turn";
+  return null;
+}
 
 /* ----------------------------- board geometry ---------------------------- */
 
@@ -68,25 +222,70 @@ function netWorth(state: GameState, player: Player): number {
 
 /* ----------------------------------- app ---------------------------------- */
 
+type OverlayKind = "assets" | "history" | "hint" | "settings" | "rules";
+
 function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [now, setNow] = useState(() => Date.now());
-  const [overlay, setOverlay] = useState<null | "assets" | "history" | "hint">(null);
+  const [overlay, setOverlay] = useState<null | OverlayKind>(null);
+  const [connected, setConnected] = useState(false);
+  const [settings, setSettings] = useState<TvSettings>(loadSettings);
   const lastCardId = useRef<string | null>(null);
   const [cardFlash, setCardFlash] = useState(false);
+  const lastEventId = useRef<string | null>(null);
+  const lastRollCount = useRef(0);
+  const [rolling, setRolling] = useState(false);
+
+  const scale = useStageScale(settings.zoom);
+
+  const updateSettings = useCallback((patch: Partial<TvSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
+
+  // Keep the audio engine in sync with the sound setting.
+  useEffect(() => {
+    audio.setEnabled(settings.sound);
+  }, [settings.sound]);
+
+  // Reflect the reduced-motion setting on the document for CSS to key off.
+  useEffect(() => {
+    document.documentElement.dataset.motion = settings.motion ? "on" : "off";
+  }, [settings.motion]);
+
+  // Unlock the AudioContext on the first user gesture (browser autoplay policy).
+  useEffect(() => {
+    const unlock = () => audio.unlock();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
 
   const joinUrl = useMemo(() => {
     if (!roomCode) return "";
-    return `http://${window.location.hostname}:5174/?room=${roomCode}`;
+    // LAN default: phone app on the same host at :5174. For a public deploy set
+    // VITE_PHONE_URL to the phone app's deployed origin (e.g. https://play.example.com).
+    const base = import.meta.env.VITE_PHONE_URL ?? `http://${window.location.hostname}:5174`;
+    return `${base.replace(/\/+$/, "")}/?room=${roomCode}`;
   }, [roomCode]);
 
   useEffect(() => {
     const next: Socket<ServerToClientEvents, ClientToServerEvents> = io(serverUrl);
     setSocket(next);
-    next.emit("createRoom");
+    next.on("connect", () => {
+      setConnected(true);
+      next.emit("createRoom");
+    });
+    next.on("disconnect", () => setConnected(false));
     next.on("roomCreated", ({ roomCode: rc, state: s }) => {
       setRoomCode(rc);
       setState(s);
@@ -97,6 +296,35 @@ function App() {
       next.disconnect();
     };
   }, []);
+
+  // Play a stinger for the newest game event (skips the backlog on first load).
+  useEffect(() => {
+    const latest = state?.events[0];
+    if (!latest) return;
+    if (lastEventId.current === null) {
+      lastEventId.current = latest.id;
+      return;
+    }
+    if (latest.id !== lastEventId.current) {
+      lastEventId.current = latest.id;
+      const stinger = stingerForEvent(latest.message, latest.tone);
+      if (stinger) audio.play(stinger);
+    }
+  }, [state?.events]);
+
+  // Trigger the dice tumble + sound on every fresh roll.
+  useEffect(() => {
+    const rc = state?.rollCount ?? 0;
+    if (rc === lastRollCount.current) return;
+    const isFirst = lastRollCount.current === 0;
+    lastRollCount.current = rc;
+    if (isFirst || !state?.dice) return;
+    audio.play("dice");
+    if (!settings.motion) return;
+    setRolling(true);
+    const t = setTimeout(() => setRolling(false), 620);
+    return () => clearTimeout(t);
+  }, [state?.rollCount, settings.motion]);
 
   useEffect(() => {
     if (!joinUrl) return;
@@ -128,66 +356,93 @@ function App() {
   const timerPct = remaining != null && state ? Math.max(0, Math.min(100, (remaining / state.turnSeconds) * 100)) : 0;
 
   return (
-    <div className="tv-root">
-      <div className="starfield" aria-hidden />
-      <div className="aurora" aria-hidden />
+    <div className="tv-viewport">
+      <div className="tv-stage" style={{ width: DESIGN_W, height: DESIGN_H, transform: `scale(${scale})` }}>
+        <div className="tv-root">
+          <div className="starfield" aria-hidden />
+          <div className="aurora" aria-hidden />
 
-      <SideMenu />
+          <SideMenu onOverlay={setOverlay} settings={settings} onToggleSound={() => updateSettings({ sound: !settings.sound })} />
 
-      <main className="tv-layout">
-        <section className="board-area">
-          <Board state={state} />
-          <PlayerDock state={state} />
-        </section>
+          <main className="tv-layout">
+            <section className="board-area">
+              <Board state={state} motion={settings.motion} rolling={rolling} />
+              <PlayerDock state={state} />
+            </section>
 
-        <aside className="rail">
-          <InvitePanel roomCode={roomCode} qrDataUrl={qrDataUrl} joinUrl={joinUrl} players={players.length} />
+            <aside className="rail">
+              <InvitePanel
+                roomCode={roomCode}
+                qrDataUrl={qrDataUrl}
+                joinUrl={joinUrl}
+                players={players.length}
+                connected={connected}
+              />
 
-          <TurnPanel
-            phase={phase}
-            currentPlayer={currentPlayer}
-            dice={state?.dice ?? null}
-            isDoubles={state?.isDoubles ?? false}
-            remaining={remaining}
-            timerPct={timerPct}
-          />
+              <TurnPanel
+                phase={phase}
+                currentPlayer={currentPlayer}
+                dice={state?.dice ?? null}
+                isDoubles={state?.isDoubles ?? false}
+                remaining={remaining}
+                timerPct={timerPct}
+                rolling={rolling}
+              />
 
-          <ControlPanel
-            phase={phase}
-            canStart={Boolean(socket && roomCode && players.length >= 2)}
-            onStart={() => roomCode && socket?.emit("hostStartGame", { roomCode })}
-            onReset={() => roomCode && socket?.emit("hostResetGame", { roomCode })}
-            onOverlay={setOverlay}
-          />
-        </aside>
-      </main>
+              <ControlPanel
+                phase={phase}
+                canStart={Boolean(socket && roomCode && players.length >= 2)}
+                botCount={players.filter((p) => p.isBot).length}
+                canAddBot={Boolean(socket && roomCode) && players.length < 6}
+                onAddBot={() => roomCode && socket?.emit("hostAddBot", { roomCode })}
+                onRemoveBot={() => roomCode && socket?.emit("hostRemoveBot", { roomCode })}
+                onStart={() => roomCode && socket?.emit("hostStartGame", { roomCode })}
+                onReset={() => roomCode && socket?.emit("hostResetGame", { roomCode })}
+                onOverlay={setOverlay}
+              />
+            </aside>
+          </main>
 
-      {cardFlash && state?.activeCard && !state?.auction && !state?.trade ? <CardModal card={state.activeCard} /> : null}
+          {cardFlash && state?.activeCard && !state?.auction && !state?.trade ? <CardModal card={state.activeCard} /> : null}
 
-      {state?.auction ? <AuctionModal state={state} /> : null}
-      {state?.trade ? <TradeModal state={state} /> : null}
+          {state?.auction ? <AuctionModal state={state} /> : null}
+          {state?.trade ? <TradeModal state={state} /> : null}
 
-      {phase === "finished" ? <WinnerModal players={players} winnerId={state?.winnerId ?? null} state={state} /> : null}
+          {phase === "finished" ? <WinnerModal players={players} winnerId={state?.winnerId ?? null} state={state} /> : null}
 
-      {overlay ? (
-        <Overlay kind={overlay} state={state} onClose={() => setOverlay(null)} />
-      ) : null}
+          {overlay ? (
+            <Overlay kind={overlay} state={state} settings={settings} onUpdate={updateSettings} onClose={() => setOverlay(null)} />
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
 
 /* --------------------------------- panels --------------------------------- */
 
-function SideMenu() {
+function SideMenu({
+  onOverlay,
+  settings,
+  onToggleSound
+}: {
+  onOverlay: (o: OverlayKind) => void;
+  settings: TvSettings;
+  onToggleSound: () => void;
+}) {
   return (
     <nav className="side-menu" aria-label="เมนู">
-      <button type="button">
+      <button type="button" onClick={() => onOverlay("settings")}>
         <Settings size={26} />
         <span>ตั้งค่า</span>
       </button>
-      <button type="button">
+      <button type="button" onClick={() => onOverlay("rules")}>
         <BookOpen size={26} />
         <span>กติกา</span>
+      </button>
+      <button type="button" onClick={onToggleSound} title={settings.sound ? "ปิดเสียง" : "เปิดเสียง"}>
+        {settings.sound ? <Volume2 size={26} /> : <VolumeX size={26} />}
+        <span>{settings.sound ? "เสียงเปิด" : "เสียงปิด"}</span>
       </button>
       <div className="sticker sticker-map">
         บ้าน
@@ -211,16 +466,22 @@ function InvitePanel({
   roomCode,
   qrDataUrl,
   joinUrl,
-  players
+  players,
+  connected
 }: {
   roomCode: string | null;
   qrDataUrl: string;
   joinUrl: string;
   players: number;
+  connected: boolean;
 }) {
   return (
     <div className="panel invite-panel">
       <div className="ribbon" aria-hidden />
+      <span className={`conn-pill${connected ? " on" : ""}`} title={connected ? "เซิร์ฟเวอร์ออนไลน์" : "ออฟไลน์"}>
+        {connected ? <Wifi size={18} /> : <WifiOff size={18} />}
+        {connected ? "ออนไลน์" : "ออฟไลน์"}
+      </span>
       <header className="invite-head">
         <Sparkles className="spark" size={30} />
         <div>
@@ -252,7 +513,8 @@ function TurnPanel({
   dice,
   isDoubles,
   remaining,
-  timerPct
+  timerPct,
+  rolling
 }: {
   phase: GameState["phase"];
   currentPlayer: Player | null;
@@ -260,6 +522,7 @@ function TurnPanel({
   isDoubles: boolean;
   remaining: number | null;
   timerPct: number;
+  rolling: boolean;
 }) {
   const status =
     phase === "lobby"
@@ -295,12 +558,12 @@ function TurnPanel({
         )}
       </div>
 
-      <div className="dice-area">
-        <Die value={dice?.[0] ?? 1} color="red" />
-        <Die value={dice?.[1] ?? 1} color="blue" />
+      <div className={`dice-area${rolling ? " rolling" : ""}`}>
+        <Die value={dice?.[0] ?? 1} color="red" rolling={rolling} />
+        <Die value={dice?.[1] ?? 1} color="blue" rolling={rolling} />
         <div className="dice-total">
           <span>รวม</span>
-          <strong>{dice ? dice[0] + dice[1] : "—"}</strong>
+          <strong>{rolling ? "?" : dice ? dice[0] + dice[1] : "—"}</strong>
         </div>
       </div>
 
@@ -319,23 +582,43 @@ function TurnPanel({
 function ControlPanel({
   phase,
   canStart,
+  botCount,
+  canAddBot,
+  onAddBot,
+  onRemoveBot,
   onStart,
   onReset,
   onOverlay
 }: {
   phase: GameState["phase"];
   canStart: boolean;
+  botCount: number;
+  canAddBot: boolean;
+  onAddBot: () => void;
+  onRemoveBot: () => void;
   onStart: () => void;
   onReset: () => void;
-  onOverlay: (o: "assets" | "history" | "hint") => void;
+  onOverlay: (o: OverlayKind) => void;
 }) {
   if (phase === "lobby") {
     return (
       <div className="panel control-panel">
+        <div className="bot-row">
+          <button className="bot-btn" onClick={onAddBot} disabled={!canAddBot} autoFocus>
+            <Bot size={22} /> เพิ่มบอท
+          </button>
+          <button className="bot-btn ghost" onClick={onRemoveBot} disabled={botCount === 0}>
+            <Minus size={20} /> ลบบอท ({botCount})
+          </button>
+        </div>
         <button className="start-button" disabled={!canStart} onClick={onStart}>
           <Play size={24} /> เริ่มเกม
         </button>
-        <p className="control-hint">{canStart ? "พร้อมแล้ว! กดเริ่มเกมได้เลย" : "ต้องมีผู้เล่นอย่างน้อย 2 คน"}</p>
+        <p className="control-hint">
+          {canStart
+            ? "พร้อมแล้ว! กดเริ่มเกมได้เลย"
+            : "เล่นคนเดียว? กด “เพิ่มบอท” 🤖 ให้ครบ 2 คนขึ้นไป"}
+        </p>
       </div>
     );
   }
@@ -379,23 +662,43 @@ function ControlPanel({
 
 /* ---------------------------------- board --------------------------------- */
 
-function Board({ state }: { state: GameState | null }) {
+function Board({ state, motion, rolling }: { state: GameState | null; motion: boolean; rolling: boolean }) {
+  const boardRef = useRef<HTMLDivElement>(null);
+  const tileRefs = useRef<(HTMLDivElement | null)[]>([]);
   return (
     <div className="board-frame">
-      <div className="board">
+      <div className="board" ref={boardRef}>
         {BOARD.map((tile, index) => (
-          <TileCell key={tile.id} tile={tile} index={index} state={state} />
+          <TileCell
+            key={tile.id}
+            tile={tile}
+            index={index}
+            state={state}
+            registerRef={(el) => {
+              tileRefs.current[index] = el;
+            }}
+          />
         ))}
-        <BoardCenter state={state} />
+        <BoardCenter state={state} rolling={rolling} />
+        <TokenLayer state={state} motion={motion} boardRef={boardRef} tileRefs={tileRefs} />
       </div>
     </div>
   );
 }
 
-function TileCell({ tile, index, state }: { tile: Tile; index: number; state: GameState | null }) {
+function TileCell({
+  tile,
+  index,
+  state,
+  registerRef
+}: {
+  tile: Tile;
+  index: number;
+  state: GameState | null;
+  registerRef: (el: HTMLDivElement | null) => void;
+}) {
   const { col, row, side } = positionFor(index);
   const owner = state?.players.find((p) => state.ownership[tile.id] === p.id) ?? null;
-  const here = state?.players.filter((p) => p.position === index && p.status === "active") ?? [];
   const pending = state?.pendingPurchaseTileId === tile.id;
   const buildings = state?.buildings[tile.id] ?? 0;
   const mortgaged = state?.mortgaged[tile.id] ?? false;
@@ -405,17 +708,17 @@ function TileCell({ tile, index, state }: { tile: Tile; index: number; state: Ga
 
   if (side === "corner") {
     return (
-      <div className="tile corner" style={{ gridColumn: col, gridRow: row }} data-kind={tile.kind}>
+      <div ref={registerRef} className="tile corner" style={{ gridColumn: col, gridRow: row }} data-kind={tile.kind}>
         <span className="corner-icon">{tile.icon}</span>
         <strong>{tile.name}</strong>
         {tile.kind === "start" ? <small>฿2,000</small> : null}
-        <TokenStack players={here} />
       </div>
     );
   }
 
   return (
     <div
+      ref={registerRef}
       className={`tile edge edge-${side}${pending ? " pending" : ""}${mortgaged ? " mortgaged" : ""}`}
       style={{ gridColumn: col, gridRow: row, ["--accent" as string]: groupColor }}
     >
@@ -439,25 +742,155 @@ function TileCell({ tile, index, state }: { tile: Tile; index: number; state: Ga
       </div>
       {owner ? <span className="owner-flag" style={{ background: owner.color }} /> : null}
       {mortgaged ? <span className="mortgage-tag">จำนอง</span> : null}
-      <TokenStack players={here} />
     </div>
   );
 }
 
-function TokenStack({ players }: { players: Player[] }) {
-  if (!players.length) return null;
-  return (
-    <div className="token-stack">
-      {players.map((p) => (
-        <span key={p.id} className="token" style={{ background: p.color }} title={p.name}>
+/**
+ * Animated token overlay. Tokens are positioned absolutely over the board and
+ * step tile-by-tile around the ring on normal dice moves (and glide directly on
+ * teleports / jail). Measuring real tile elements keeps it aligned at any scale.
+ */
+function TokenLayer({
+  state,
+  motion,
+  boardRef,
+  tileRefs
+}: {
+  state: GameState | null;
+  motion: boolean;
+  boardRef: React.RefObject<HTMLDivElement | null>;
+  tileRefs: React.RefObject<(HTMLDivElement | null)[]>;
+}) {
+  const players = state?.players ?? [];
+  const [centers, setCenters] = useState<{ x: number; y: number; w: number }[]>([]);
+  const [display, setDisplay] = useState<Record<string, number>>({});
+  const displayRef = useRef<Record<string, number>>({});
+
+  const playerCount = players.length;
+  const posKey = players.map((p) => `${p.id}:${p.position}:${p.status}`).join("|");
+
+  const measure = useCallback(() => {
+    const arr = (tileRefs.current ?? []).map((el) =>
+      el
+        ? { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2, w: el.offsetWidth }
+        : { x: 0, y: 0, w: 0 }
+    );
+    setCenters((prev) => {
+      // Avoid needless re-renders when nothing moved.
+      if (prev.length === arr.length && prev.every((c, i) => c.x === arr[i].x && c.y === arr[i].y && c.w === arr[i].w)) {
+        return prev;
+      }
+      return arr;
+    });
+  }, [tileRefs]);
+
+  // Measure tile centers (layout coords, scale-independent). Re-measure whenever
+  // the board can reshape: player dock grows, a move happens, fonts settle, or
+  // the window resizes.
+  useLayoutEffect(() => {
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (boardRef.current) ro.observe(boardRef.current);
+    const t = window.setTimeout(measure, 600);
+    return () => {
+      ro.disconnect();
+      clearTimeout(t);
+    };
+  }, [measure, boardRef, playerCount, posKey]);
+
+  // Step each token toward its target position.
+  useEffect(() => {
+    if (!state) return;
+    const N = BOARD.length;
+    let id = 0;
+    const tick = () => {
+      const prev = displayRef.current;
+      const next = { ...prev };
+      let changed = false;
+      let unsettled = false;
+      for (const p of players) {
+        const target = p.position;
+        const cur = next[p.id];
+        if (cur === undefined) {
+          next[p.id] = target;
+          changed = true;
+          continue;
+        }
+        if (cur === target) continue;
+        const forward = (((target - cur) % N) + N) % N;
+        next[p.id] = motion && forward >= 1 && forward <= 12 ? (cur + 1) % N : target;
+        changed = true;
+        if (next[p.id] !== target) unsettled = true;
+      }
+      for (const pid of Object.keys(next)) {
+        if (!players.some((p) => p.id === pid)) {
+          delete next[pid];
+          changed = true;
+        }
+      }
+      if (changed) {
+        displayRef.current = next;
+        setDisplay(next);
+      }
+      if (!unsettled && id) {
+        clearInterval(id);
+        id = 0;
+      }
+    };
+    id = window.setInterval(tick, 160);
+    tick();
+    return () => {
+      if (id) clearInterval(id);
+    };
+  }, [posKey, motion, state]);
+
+  if (!state || centers.length !== BOARD.length) return null;
+
+  // Group tokens by their current displayed tile to cluster them.
+  const groups = new Map<number, Player[]>();
+  for (const p of players) {
+    if (p.status === "bankrupt") continue;
+    const idx = display[p.id] ?? p.position;
+    const list = groups.get(idx) ?? [];
+    list.push(p);
+    groups.set(idx, list);
+  }
+
+  const nodes: React.ReactNode[] = [];
+  for (const [idx, list] of groups) {
+    const c = centers[idx];
+    if (!c) continue;
+    const size = Math.max(16, Math.min(c.w * 0.46, 34));
+    list.forEach((p, i) => {
+      const ox = ((i % 3) - 1) * size * 0.62;
+      const oy = (Math.floor(i / 3) - (list.length > 3 ? 0.5 : 0)) * size * 0.62;
+      const isCurrent = state.currentPlayerId === p.id && state.phase === "playing";
+      nodes.push(
+        <span
+          key={p.id}
+          className={`piece${isCurrent ? " current" : ""}${p.inJail ? " jailed" : ""}`}
+          style={{
+            left: c.x + ox,
+            top: c.y + oy,
+            width: size,
+            height: size,
+            fontSize: size * 0.56,
+            background: p.color,
+            transition: motion ? "left .16s linear, top .16s linear" : "none"
+          }}
+          title={p.name}
+        >
           {p.token}
         </span>
-      ))}
-    </div>
-  );
+      );
+    });
+  }
+
+  return <div className="token-layer">{nodes}</div>;
 }
 
-function BoardCenter({ state }: { state: GameState | null }) {
+function BoardCenter({ state, rolling }: { state: GameState | null; rolling: boolean }) {
   const dice = state?.dice;
   return (
     <div className="board-center">
@@ -478,9 +911,9 @@ function BoardCenter({ state }: { state: GameState | null }) {
         </h1>
         <strong>เกมซื้อขายที่ดินของคนไทย</strong>
       </div>
-      <div className="center-dice">
-        <Die value={dice?.[0] ?? 3} color="red" />
-        <Die value={dice?.[1] ?? 5} color="blue" />
+      <div className={`center-dice${rolling ? " rolling" : ""}`}>
+        <Die value={dice?.[0] ?? 3} color="red" rolling={rolling} />
+        <Die value={dice?.[1] ?? 5} color="blue" rolling={rolling} />
       </div>
       <div className="center-stats">
         <span>
@@ -528,6 +961,7 @@ function PlayerDock({ state }: { state: GameState | null }) {
               <strong>{player.name}</strong>
               <em>฿{player.money.toLocaleString()}</em>
               <div className="chips">
+                {player.isBot ? <span className="bot-tag">🤖 บอท</span> : null}
                 <span>
                   <Home size={15} /> {houses}
                 </span>
@@ -565,11 +999,11 @@ const PIPS: Record<number, number[]> = {
   6: [0, 2, 3, 5, 6, 8]
 };
 
-function Die({ value, color }: { value: number; color: "red" | "blue" }) {
+function Die({ value, color, rolling }: { value: number; color: "red" | "blue"; rolling?: boolean }) {
   const v = Math.max(1, Math.min(6, value));
   const pips = PIPS[v];
   return (
-    <span className={`die die-${color}`} aria-label={`ลูกเต๋า ${v}`}>
+    <span className={`die die-${color}${rolling ? " rolling" : ""}`} aria-label={`ลูกเต๋า ${v}`}>
       {Array.from({ length: 9 }).map((_, i) => (
         <i key={i} className={pips.includes(i) ? "on" : ""} />
       ))}
@@ -583,7 +1017,9 @@ function CardModal({ card }: { card: NonNullable<GameState["activeCard"]> }) {
   return (
     <div className="card-modal-wrap">
       <div className={`card-modal tone-${card.tone}`}>
-        <span className="card-kicker">{card.tone === "bad" ? "การ์ดดวง" : "การ์ดดวง"}</span>
+        <span className="card-kicker">
+          {card.tone === "good" ? "✨ การ์ดโชคดี" : card.tone === "bad" ? "⚠️ การ์ดเคราะห์" : "🃏 การ์ดดวง"}
+        </span>
         <div className="card-icon">{card.tone === "good" ? "🎉" : card.tone === "bad" ? "⚠️" : "🃏"}</div>
         <p>{card.text}</p>
       </div>
@@ -731,10 +1167,14 @@ function WinnerModal({
 function Overlay({
   kind,
   state,
+  settings,
+  onUpdate,
   onClose
 }: {
-  kind: "assets" | "history" | "hint";
+  kind: OverlayKind;
   state: GameState | null;
+  settings: TvSettings;
+  onUpdate: (patch: Partial<TvSettings>) => void;
   onClose: () => void;
 }) {
   return (
@@ -746,7 +1186,125 @@ function Overlay({
         {kind === "assets" ? <AssetsView state={state} /> : null}
         {kind === "history" ? <HistoryView state={state} /> : null}
         {kind === "hint" ? <HintView /> : null}
+        {kind === "rules" ? <RulesView /> : null}
+        {kind === "settings" ? <SettingsView settings={settings} onUpdate={onUpdate} /> : null}
       </div>
+    </div>
+  );
+}
+
+function SettingsView({ settings, onUpdate }: { settings: TvSettings; onUpdate: (patch: Partial<TvSettings>) => void }) {
+  const zoomPct = Math.round(settings.zoom * 100);
+  return (
+    <div className="settings-view">
+      <h2>
+        <Settings size={28} /> ตั้งค่า
+      </h2>
+      <div className="set-row">
+        <div>
+          <strong>เสียงเอฟเฟกต์</strong>
+          <small>เสียงลูกเต๋า ซื้อขาย และการ์ด</small>
+        </div>
+        <button className={`toggle${settings.sound ? " on" : ""}`} onClick={() => onUpdate({ sound: !settings.sound })}>
+          {settings.sound ? <Volume2 size={22} /> : <VolumeX size={22} />}
+          {settings.sound ? "เปิด" : "ปิด"}
+        </button>
+      </div>
+      <div className="set-row">
+        <div>
+          <strong>แอนิเมชัน</strong>
+          <small>การเดินหมากและลูกเต๋า (ปิดเพื่อความนิ่ง)</small>
+        </div>
+        <button className={`toggle${settings.motion ? " on" : ""}`} onClick={() => onUpdate({ motion: !settings.motion })}>
+          <Zap size={22} />
+          {settings.motion ? "เปิด" : "ปิด"}
+        </button>
+      </div>
+      <div className="set-row">
+        <div>
+          <strong>ปรับขอบจอ (Overscan)</strong>
+          <small>ถ้าขอบภาพถูกตัดบนทีวี ให้ลดค่าลง — ตอนนี้ {zoomPct}%</small>
+        </div>
+        <div className="zoom-ctl">
+          <button onClick={() => onUpdate({ zoom: Math.max(0.85, Math.round((settings.zoom - 0.01) * 100) / 100) })}>
+            <Minus size={20} />
+          </button>
+          <strong>{zoomPct}%</strong>
+          <button onClick={() => onUpdate({ zoom: Math.min(1, Math.round((settings.zoom + 0.01) * 100) / 100) })}>
+            <Plus size={20} />
+          </button>
+        </div>
+      </div>
+      <p className="set-note">การตั้งค่าจะถูกจำไว้ในเครื่องนี้โดยอัตโนมัติ</p>
+    </div>
+  );
+}
+
+function RulesView() {
+  return (
+    <div className="rules-view">
+      <h2>
+        <BookOpen size={28} /> กติกาการเล่น
+      </h2>
+      <ol className="rules-list">
+        <li>
+          <span className="rn">1</span>
+          <div>
+            <strong>ทอยลูกเต๋า แล้วเดินตามแต้ม</strong>
+            ผู้เล่นผลัดกันทอยลูกเต๋า 2 ลูกบนมือถือ แล้วหมากจะเดินรอบกระดานตามเข็มนาฬิกา ทอย
+            <em>แต้มคู่</em> ได้ทอยซ้ำ — แต่ครบ 3 ครั้งติดถูกส่งเข้าคุก
+          </div>
+        </li>
+        <li>
+          <span className="rn">2</span>
+          <div>
+            <strong>ซื้อที่ดิน หรือเปิดประมูล</strong>
+            ตกช่องที่ยังไม่มีเจ้าของ เลือก <em>ซื้อ</em> หรือ <em>ข้าม</em> — ถ้าข้าม ทุกคนจะร่วมประมูลแข่งราคากัน
+          </div>
+        </li>
+        <li>
+          <span className="rn">3</span>
+          <div>
+            <strong>เก็บค่าเช่า</strong>
+            ใครตกช่องที่เราเป็นเจ้าของต้องจ่ายค่าเช่า — ถือครบทั้งโซนสีเดียวกันค่าเช่าเพิ่มเป็น 2 เท่า
+          </div>
+        </li>
+        <li>
+          <span className="rn">4</span>
+          <div>
+            <strong>สร้างบ้านและโรงแรม</strong>
+            ถือครบทั้งโซนสี สร้างบ้านได้ (สร้างเฉลี่ยทั่วโซน) ยิ่งมีบ้าน-โรงแรมค่าเช่ายิ่งพุ่ง
+          </div>
+        </li>
+        <li>
+          <span className="rn">5</span>
+          <div>
+            <strong>การ์ดดวง &amp; งานบุญ</strong>
+            ตกช่อง <em>ดวง</em> หรือ <em>งานบุญ</em> เปิดการ์ดรับโชคหรือจ่ายเคราะห์
+          </div>
+        </li>
+        <li>
+          <span className="rn">6</span>
+          <div>
+            <strong>จำนอง &amp; แลกเปลี่ยน</strong>
+            ขัดสนเงินสด จำนองโฉนดเอาเงินด่วน หรือยื่นข้อเสนอแลกที่ดิน+เงินกับเพื่อนได้บนมือถือ
+          </div>
+        </li>
+        <li>
+          <span className="rn">7</span>
+          <div>
+            <strong>ผ่านช่องเงินเดือน</strong>
+            เดินผ่านหรือหยุดที่ช่องเริ่ม รับเงินเดือน ฿2,000 ทุกครั้ง
+          </div>
+        </li>
+        <li>
+          <span className="rn">🏆</span>
+          <div>
+            <strong>ผู้ชนะ</strong>
+            ใครจ่ายหนี้ไม่ไหวถือว่าล้มละลาย เหลือคนสุดท้ายในเกม = เศรษฐีที่ยิ่งใหญ่!
+          </div>
+        </li>
+      </ol>
     </div>
   );
 }

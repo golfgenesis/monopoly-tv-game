@@ -16,8 +16,14 @@ export interface ClientToServerEvents {
     color: string;
     avatar: string;
   }) => void;
+  /** Re-attach an existing player (after a phone refresh / sleep). Works mid-game. */
+  rejoinRoom: (payload: { roomCode: string; playerId: string }) => void;
   hostStartGame: (payload: { roomCode: string }) => void;
   hostResetGame: (payload: { roomCode: string }) => void;
+  /** Add an AI player to the lobby (host control from the TV). */
+  hostAddBot: (payload: { roomCode: string }) => void;
+  /** Remove the most recently added AI player from the lobby. */
+  hostRemoveBot: (payload: { roomCode: string }) => void;
   playerAction: (payload: { roomCode: string; playerId: string; action: GameAction }) => void;
 }
 

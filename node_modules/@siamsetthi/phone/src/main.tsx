@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io, type Socket } from "socket.io-client";
 import {
@@ -51,6 +51,48 @@ const CHARACTERS: Character[] = [
 ];
 
 const COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#0ea5e9", "#3b82f6", "#8b5cf6", "#ec4899"];
+
+/* ----------------------------- session + haptics -------------------------- */
+
+interface Session {
+  roomCode: string;
+  playerId: string;
+}
+const SESSION_KEY = "siamsetthi.session";
+
+function loadSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Session;
+    return parsed.roomCode && parsed.playerId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function saveSession(session: Session): void {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    /* private mode / quota — non-fatal */
+  }
+}
+function clearSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Short tactile buzz on button taps where the device supports it. */
+function buzz(ms = 18): void {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* not supported */
+  }
+}
 
 /* ------------------------------- build rules ------------------------------ */
 
@@ -126,7 +168,12 @@ function ControllerApp() {
   const [playerId, setPlayerId] = useState("");
   const [state, setState] = useState<GameState | null>(null);
   const [error, setError] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [tab, setTab] = useState<"play" | "manage" | "trade">("play");
+  // Saved session for auto-rejoin after a refresh / phone sleep.
+  const sessionRef = useRef<Session | null>(loadSession());
+  const pendingRejoin = useRef(false);
   // Trade builder draft
   const [tradeTarget, setTradeTarget] = useState("");
   const [giveProps, setGiveProps] = useState<string[]>([]);
@@ -137,14 +184,43 @@ function ControllerApp() {
   useEffect(() => {
     const next: Socket<ServerToClientEvents, ClientToServerEvents> = io(serverUrl);
     setSocket(next);
+
+    next.on("connect", () => {
+      setConnected(true);
+      // Auto re-attach to a previous game after a refresh, sleep, or brief drop.
+      const saved = sessionRef.current;
+      if (saved) {
+        pendingRejoin.current = true;
+        setReconnecting(true);
+        next.emit("rejoinRoom", saved);
+      }
+    });
+    next.on("disconnect", () => setConnected(false));
+
     next.on("joined", (payload) => {
+      pendingRejoin.current = false;
+      setReconnecting(false);
       setPlayerId(payload.playerId);
       setRoomCode(payload.roomCode);
       setState(payload.state);
       setError("");
+      const session = { roomCode: payload.roomCode, playerId: payload.playerId };
+      sessionRef.current = session;
+      saveSession(session);
     });
     next.on("roomState", ({ state: s }) => setState(s));
-    next.on("errorMessage", setError);
+    next.on("errorMessage", (message) => {
+      // A failed rejoin means the saved session is stale — drop it silently.
+      if (pendingRejoin.current) {
+        pendingRejoin.current = false;
+        setReconnecting(false);
+        sessionRef.current = null;
+        clearSession();
+        return;
+      }
+      setError(message);
+    });
+
     return () => {
       next.disconnect();
     };
@@ -166,6 +242,7 @@ function ControllerApp() {
   }, [player]);
 
   function joinRoom() {
+    buzz();
     socket?.emit("joinRoom", {
       roomCode: roomCode.trim().toUpperCase(),
       name: name.trim() || character.name,
@@ -177,7 +254,29 @@ function ControllerApp() {
 
   function send(action: GameAction) {
     if (!socket || !state || !playerId) return;
+    buzz();
     socket.emit("playerAction", { roomCode: state.roomCode, playerId, action });
+  }
+
+  function leaveGame() {
+    clearSession();
+    sessionRef.current = null;
+    setPlayerId("");
+    setState(null);
+    setError("");
+  }
+
+  /* --------------------------- reconnecting screen ------------------------ */
+  if (reconnecting && (!playerId || !player)) {
+    return (
+      <main className="phone join-screen">
+        <div className="join-card reconnecting-card">
+          <div className="spinner" aria-hidden />
+          <h1>กำลังเชื่อมต่อใหม่…</h1>
+          <p>พาคุณกลับเข้าเกมเดิมอยู่ รอสักครู่</p>
+        </div>
+      </main>
+    );
   }
 
   /* ------------------------------ join screen ----------------------------- */
@@ -191,6 +290,7 @@ function ControllerApp() {
               <h1>เศรษฐีสยาม</h1>
               <p>คอนโทรลเลอร์ผู้เล่น</p>
             </div>
+            <span className={`conn-dot${connected ? " on" : ""}`} title={connected ? "เชื่อมต่อแล้ว" : "ออฟไลน์"} />
           </div>
 
           <label className="field">
@@ -302,7 +402,10 @@ function ControllerApp() {
             {player.token}
           </span>
           <div>
-            <strong>{player.name}</strong>
+            <strong>
+              {player.name}
+              <span className={`conn-dot${connected ? " on" : ""}`} title={connected ? "เชื่อมต่อแล้ว" : "ออฟไลน์"} />
+            </strong>
             <small>
               {finished
                 ? "จบเกมแล้ว"
@@ -318,6 +421,10 @@ function ControllerApp() {
           <Banknote size={18} />฿{player.money.toLocaleString()}
         </div>
       </header>
+
+      {!connected ? (
+        <div className="offline-banner">⚠️ ออฟไลน์ — กำลังเชื่อมต่อใหม่…</div>
+      ) : null}
 
       {state?.activeCard ? (
         <div className={`card-banner tone-${state.activeCard.tone}`}>
@@ -450,6 +557,9 @@ function ControllerApp() {
               <Trophy size={40} />
               <h2>{winner?.id === player.id ? "คุณคือผู้ชนะ! 🎉" : `${winner?.name ?? "—"} ชนะเกม`}</h2>
               <p>ดูสรุปอันดับบนหน้าจอทีวี</p>
+              <button className="btn ghost" onClick={leaveGame}>
+                <DoorOpen size={18} /> ออกจากเกม
+              </button>
             </div>
           ) : waiting ? (
             <div className="status-card">

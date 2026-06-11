@@ -74,6 +74,8 @@ export interface Player {
   color: string;
   /** Avatar key for the portrait shown on TV (see AVATARS). */
   avatar: string;
+  /** Server-controlled AI player. */
+  isBot: boolean;
   money: number;
   position: number;
   properties: string[];
@@ -140,6 +142,8 @@ export interface GameState {
   players: Player[];
   currentPlayerId: string | null;
   dice: [number, number] | null;
+  /** Monotonic counter bumped on every processed roll — drives roll animations. */
+  rollCount: number;
   isDoubles: boolean;
   doublesCount: number;
   canRoll: boolean;
@@ -167,8 +171,9 @@ export interface GameState {
 export type GameAction =
   | {
       type: "addPlayer";
-      player: Pick<Player, "id" | "name" | "token" | "color" | "avatar">;
+      player: Pick<Player, "id" | "name" | "token" | "color" | "avatar"> & { isBot?: boolean };
     }
+  | { type: "removeBot" }
   | { type: "startGame" }
   | { type: "resetGame" }
   | { type: "rollDice"; playerId: string; dice: [number, number]; draw: number }

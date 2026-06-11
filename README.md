@@ -1,77 +1,139 @@
-# เศรษฐีสยาม TV Game
+# 🎲 เศรษฐีสยาม — Siam Setthi TV Game
 
-เกมเศรษฐีไทยแบบคลาสสิกยุค 90 แต่ทำเป็น UI ทันสมัยสำหรับทีวี 4K โดยให้มือถือของผู้เล่นแต่ละคนเป็น controller
+เกมเศรษฐีไทยสไตล์ยุค 90 ที่เอา **ทีวีเป็นกระดานกลาง** และ **มือถือของผู้เล่นแต่ละคนเป็นจอยคอนโทรลเลอร์ส่วนตัว** ออกแบบมาเพื่อเล่นบนจอใหญ่ระดับห้องนั่งเล่น โดยเฉพาะ **TCL 75″ 4K Mini QLED Google TV (รุ่น 75Q6C)**
 
-## Run
+> กล่องของเล่นกระดาษยุค 90 — สีเหลืองจัด ขอบแดง พื้นฟ้า สายรุ้งพาด ตัวการ์ตูนสไตล์อนิเมะ — แต่เป็นเกมต้นฉบับใหม่หมด ไม่ลอกชื่อ/โลโก้/กระดานของใคร
 
+<p align="center">
+  <em>ทอยเต๋าบนมือถือ → หมากเดินรอบกระดานบนทีวี → ซื้อที่ดิน เก็บค่าเช่า สร้างบ้าน ประมูล แลกเปลี่ยน จนเหลือเศรษฐีคนสุดท้าย</em>
+</p>
+
+---
+
+## ⚡ เริ่มเล่นเร็ว (TL;DR)
+
+**Docker (เครื่องเดียวจบ — แนะนำสำหรับ Ubuntu/Linux ที่บ้าน):**
+```bash
+docker compose up -d --build
+# เปิดทีวีที่ http://<ip-เครื่องนี้>:5173   (หา IP: hostname -I)
+```
+
+**หรือโหมดพัฒนาด้วย Node:**
 ```bash
 npm install
 npm run dev
 ```
 
-Dev URLs:
+เปิด 3 พอร์ตให้อัตโนมัติ:
 
-- TV host: `http://localhost:5173`
-- Phone controller: `http://localhost:5174`
-- Realtime server: `http://localhost:4000`
+| บริการ | URL (เครื่องนี้) | หน้าที่ |
+| --- | --- | --- |
+| 📺 **TV host** | `http://localhost:5173` | จอกระดานกลางบนทีวี |
+| 📱 **Phone controller** | `http://localhost:5174` | จอยมือถือผู้เล่น |
+| 🔌 **Realtime server** | `http://localhost:4000` | เซิร์ฟเวอร์เกม (ตัดสินทุกอย่าง) |
 
-On this machine's current LAN, Vite detected:
+จากนั้น:
 
-- TV host for Google TV: `http://192.168.1.65:5173`
-- Phone controller base: `http://192.168.1.65:5174`
+1. เปิด TV host บนทีวี → ทีวีสร้างห้องและโชว์ **QR code + รหัสห้อง 5 ตัว** ให้เอง
+2. ผู้เล่นสแกน QR ด้วยมือถือ (หรือเข้า URL phone แล้วพิมพ์รหัสห้อง)
+3. แต่ละคนเลือกตัวละคร + สี + ชื่อเล่น แล้วกด **เข้าร่วมเกม**
+4. มีผู้เล่น 2–6 คนแล้ว กด **เริ่มเกม** บนทีวี
+5. เล่นด้วยมือถือล้วน — ทีวีไม่ต้องกดอะไรอีกเลยระหว่างเกม
 
-Your IP can change after restarting the router or computer. If it changes, read the `Network:` URL printed by `npm run dev`.
+> 🤖 **เล่นคนเดียว?** ในล็อบบี้กด **เพิ่มบอท** บนทีวีให้ครบ 2 คนขึ้นไป แล้วเริ่มได้เลย
 
-## How To Play On TCL Google TV
+📖 **คู่มือติดตั้งบน TCL Google TV 75Q6C โดยเฉพาะ → [docs/SETUP-TCL-GOOGLE-TV.md](docs/SETUP-TCL-GOOGLE-TV.md)**
 
-1. Keep the computer running `npm run dev`.
-2. Make sure the TCL Google TV and all phones are on the same Wi-Fi network.
-3. On the TCL Google TV, open a browser app.
-4. Go to the TV host URL, for example `http://192.168.1.65:5173`.
-5. The TV will create a room automatically and show a QR code plus a room code.
-6. Each player scans the QR code with their phone.
-7. Each player enters a name, chooses a token/color, and taps `เข้าร่วม`.
-8. When at least 2 players have joined, press `เริ่มเกม` on the TV.
-9. Players use their phones to tap `ทอยลูกเต๋า`, `ซื้อโฉนด`, `ข้าม`, and `จบตา`.
+---
 
-## If The TV Cannot Open The URL
+## 🎮 จุดเด่น
 
-- Confirm the TV and computer are on the same Wi-Fi.
-- Use the computer's LAN IP, not `localhost`, on the TV.
-- Allow Node.js through Windows Firewall if prompted.
-- Try opening `http://192.168.1.65:5173` from a phone first. If the phone cannot open it, the TV will not either.
-- If the computer IP changed, restart `npm run dev` and use the new `Network:` URL.
+- **ทีวี = กระดาน, มือถือ = จอย** ข้อมูลส่วนตัว (เงิน โฉนด การตัดสินใจ) อยู่บนมือถือ ไม่โผล่บนทีวีจนกว่าจะยืนยัน
+- **ออกแบบสำหรับจอ 75″ 4K** — UI ทั้งหมดวาดบนผืน 1920×1080 แล้ว **สเกลพอดีจอแบบยูนิฟอร์ม** อ่านชัดจากโซฟา ปรับ overscan ได้ในตั้งค่า
+- **หมากเดินจริงรอบกระดาน** — เลื่อนทีละช่องพร้อมเด้ง ลูกเต๋าหมุน เอฟเฟกต์เสียงยุค 90 (เปิด/ปิดได้)
+- **เซิร์ฟเวอร์ตัดสินทุกอย่าง** — ทอยเต๋า/จับการ์ดทำที่เซิร์ฟเวอร์ มือถือโกงค่าเงิน/เต๋าไม่ได้
+- **🤖 เล่นคนเดียวกับบอทได้** — กด “เพิ่มบอท” บนทีวี บอท AI ทอย/ซื้อ/ประมูล/สร้างบ้าน/รับเทรดเองได้
+- **ต่อกลับอัตโนมัติ** — มือถือดับ/รีเฟรช/หลุดเน็ตชั่วคราว กลับเข้าเกมเดิมได้เอง
+- **กฎครบเกมเศรษฐี** — ซื้อ/ค่าเช่า/ผูกขาดทั้งโซน/สร้างบ้าน-โรงแรม/จำนอง/ประมูล/แลกเปลี่ยน/ติดคุก/ล้มละลาย/หาผู้ชนะ
 
-## Gameplay (Phone Controller)
+---
 
-1. On the TV, the room is created automatically — note the 5-character room code.
-2. Each player opens the phone URL, picks a character + color, types a name, and taps `เข้าร่วมเกม`.
-3. With 2–6 players in, press `เริ่มเกม` on the TV.
-4. On your turn the phone shows the right action:
-   - `ทอยลูกเต๋า` — roll (rolling doubles lets you roll again; three doubles sends you to jail).
-   - `ซื้อ / ข้าม` — buy the deed you landed on, or pass.
-   - `จบตาของฉัน` — end your turn.
-   - In jail: roll for doubles, pay `฿500`, or use a `บัตรพ้นโทษ` card.
-5. The `จัดการ` tab lets you build houses/hotels (once you own a whole color group), sell them back, and mortgage / redeem deeds for cash.
-6. The `เทรด` tab lets you offer your deeds + cash to another player in exchange for theirs; the other player accepts or rejects on their phone.
-7. Declining to buy a deed (`ข้าม`) sends it to an **auction** — every player bids in turn until one remains, and the high bidder buys it.
-8. Last player standing wins — the TV shows the winner and a net-worth ranking.
+## 🕹️ วิธีเล่น (ฝั่งมือถือ)
 
-## Implemented
+ในตาของคุณ มือถือจะโชว์ปุ่มที่เหมาะกับสถานการณ์เอง:
 
-- TV room creation + QR/room-code join, 2–6 players.
-- 40-tile Bangkok board with 8 color groups, 4 transport, 2 utilities, 4 corners.
-- Server-authoritative dice + card draws, per-turn think timer with AFK auto-advance.
-- Salary on passing start, buyable deeds, rent that scales with monopolies + houses/hotels.
-- Chance (`ดวง`) and Community (`งานบุญ`) card decks.
-- Jail: go-to-jail, doubles escape, pay/`บัตรพ้นโทษ`.
-- Houses & hotels with even-build rule, mortgages with redemption interest.
-- Property auctions when a deed is declined (ascending, turn-based bidding).
-- Player-to-player trading (deeds + cash) with accept/reject.
-- Bankruptcy with asset transfer to the creditor, and win detection.
-- Polished 4K-ready TV UI (board, player dock, turn panel + timer, card/auction/trade modals, asset/history overlays) and a full phone controller.
+- **ทอยลูกเต๋า** — ทอยเดิน (แต้มคู่ได้ทอยซ้ำ, แต้มคู่ 3 ครั้งติดเข้าคุก)
+- **ซื้อ / ข้าม** — ซื้อโฉนดที่เหยียบ หรือข้าม (ข้าม = เปิดประมูลให้ทุกคนแย่งกัน)
+- **จบตาของฉัน** — จบตา
+- **ในคุก** — ทอยหาแต้มคู่ / จ่าย ฿500 / ใช้บัตรพ้นโทษ
+- แท็บ **จัดการ** — สร้างบ้าน-โรงแรม (เมื่อถือครบโซนสี), ขายคืน, จำนอง/ไถ่ถอน
+- แท็บ **เทรด** — ยื่นข้อเสนอแลกโฉนด+เงินกับผู้เล่นอื่น (อีกฝ่ายรับ/ปฏิเสธบนมือถือตัวเอง)
 
-## Still Planned
+📖 กติกาเต็ม + ตารางค่าเช่า → [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 
-- Original mascot art and production board illustrations.
-- Android TV wrapper if browser launch is inconvenient.
+---
+
+## 🖥️ ฝั่งทีวี (host)
+
+- กระดาน 40 ช่อง ธีมกรุงเทพ 8 โซนสี + รถขนส่ง 4 + สาธารณูปโภค 2 + มุม 4
+- แผงด้านขวา: QR เชิญเล่น, แผงตาเล่นปัจจุบัน + ลูกเต๋า + ตัวจับเวลา, แถบควบคุม
+- แถบผู้เล่นด้านล่าง: เงิน บ้าน โรงแรม สถานะคุก/ล้มละลาย และดาวผู้นำ
+- เมนูซ้าย: **ตั้งค่า** (เสียง / แอนิเมชัน / overscan), **กติกา**, **เปิด-ปิดเสียง**
+- โมดัล: เปิดการ์ด, ประมูล, ข้อเสนอแลกเปลี่ยน, พิธีประกาศผู้ชนะ
+- ทีวีไม่ต้องใช้รีโมตระหว่างเล่น (กดรีโมต 1 ครั้งตอนเริ่มเพื่อปลดล็อกเสียงเท่านั้น)
+
+---
+
+## 📦 โครงสร้างโปรเจกต์
+
+```
+monopoly-tv-game/
+├─ apps/
+│  ├─ tv/        จอทีวี (Vite + React) — กระดาน, หมาก, โมดัล
+│  ├─ phone/     จอยมือถือ (Vite + React) — เข้าห้อง, ปุ่มแอ็กชัน, เทรด
+│  └─ server/    เซิร์ฟเวอร์เรียลไทม์ (Express + Socket.IO) — ตัดสินเกม
+├─ packages/
+│  ├─ rules/     ตรรกะเกมล้วน (reducer + กระดาน + การ์ด) + เทสต์ Vitest
+│  └─ shared/    ชนิดข้อมูลของ Socket.IO ที่ใช้ร่วมกัน
+└─ docs/         เอกสาร
+```
+
+📖 รายละเอียดสถาปัตยกรรม → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+---
+
+## 🛠️ คำสั่ง
+
+| คำสั่ง | ทำอะไร |
+| --- | --- |
+| `npm run dev` | รัน server + tv + phone พร้อมกัน (โหมดพัฒนา) |
+| `npm test` | รันเทสต์ตรรกะเกม (Vitest) |
+| `npm run build` | typecheck + build ทุก workspace สำหรับ production |
+| `npm start --workspace @siamsetthi/server` | รันเซิร์ฟเวอร์เกมแบบ production (พอร์ต 4000) |
+
+URL บน LAN จะถูกพิมพ์ตอน `npm run dev` (บรรทัด `Network:`) ใช้ IP นั้นบนทีวีและมือถือ ถ้า IP เปลี่ยน (รีสตาร์ตเราเตอร์/เครื่อง) ให้ดู `Network:` ใหม่อีกครั้ง
+
+---
+
+## 🌐 เล่นบนเครือข่ายจริง
+
+1. คอมที่รัน `npm run dev`, ทีวี, และมือถือทุกเครื่อง ต้องอยู่ **Wi-Fi/LAN วงเดียวกัน**
+2. บนทีวีและมือถือ ใช้ **IP ของคอม** (เช่น `http://192.168.1.50:5173`) ไม่ใช่ `localhost`
+3. ถ้า Windows ถาม Firewall ให้ **อนุญาต Node.js**
+4. ทดสอบจากมือถือก่อน: ถ้ามือถือเปิด `http://<ip>:5173` ไม่ได้ ทีวีก็จะเปิดไม่ได้เช่นกัน
+
+แก้ปัญหาเครือข่าย + วิธีติดตั้งบน Google TV ดูที่ [docs/SETUP-TCL-GOOGLE-TV.md](docs/SETUP-TCL-GOOGLE-TV.md)
+
+อยากให้เพื่อนต่างที่เข้าเล่นผ่านอินเทอร์เน็ต (เช่น Cloudflare Pages) → ดู [docs/DEPLOY.md](docs/DEPLOY.md)
+
+---
+
+## ⚖️ หมายเหตุความเป็นต้นฉบับ
+
+เกมนี้เป็นงานต้นฉบับที่ได้แรงบันดาลใจจาก *อารมณ์* ของเกมกระดานเศรษฐกิจไทยยุค 90 เท่านั้น ชื่อเกม ชื่อช่อง การ์ด ไอคอน ตัวละคร และหน้าตาทั้งหมดสร้างขึ้นใหม่ ไม่ได้คัดลอกชื่อ/โลโก้/กระดาน/มาสคอตของผลิตภัณฑ์ใด
+
+---
+
+## 🧰 เทคโนโลยี
+
+Vite · TypeScript · React 19 · Socket.IO · Express · Vitest · Playwright (smoke test) · Web Audio API (เสียงสังเคราะห์ ไม่ต้องมีไฟล์เสียง)

@@ -134,6 +134,36 @@ describe("เศรษฐีสยาม board rules", () => {
     expect(state.players[1].money).toBe(15000 - 500);
   });
 
+  it("adds and removes bot players in the lobby", () => {
+    let state = createInitialState("ABCDE");
+    state = reduceGameState(state, {
+      type: "addPlayer",
+      player: { id: "p1", name: "ฉัน", token: "🧑", color: "#22c55e", avatar: "pond" }
+    });
+    state = reduceGameState(state, {
+      type: "addPlayer",
+      player: { id: "bot-1", name: "บอทเฮง", token: "🤖", color: "#a855f7", avatar: "bot", isBot: true }
+    });
+    expect(state.players[0].isBot).toBe(false);
+    expect(state.players[1].isBot).toBe(true);
+
+    // removeBot drops the last bot, never the human.
+    state = reduceGameState(state, { type: "removeBot" });
+    expect(state.players.map((p) => p.id)).toEqual(["p1"]);
+    // removeBot with no bots left is a no-op.
+    expect(reduceGameState(state, { type: "removeBot" })).toBe(state);
+  });
+
+  it("bumps rollCount on every processed roll (drives roll animations)", () => {
+    let state = twoPlayerGame();
+    expect(state.rollCount).toBe(0);
+    state = reduceGameState(state, { type: "rollDice", playerId: "p1", dice: [1, 2], draw: 0 });
+    expect(state.rollCount).toBe(1);
+    // A rejected roll from the wrong player must not bump the counter.
+    const blocked = reduceGameState(state, { type: "rollDice", playerId: "p2", dice: [1, 2], draw: 0 });
+    expect(blocked.rollCount).toBe(1);
+  });
+
   it("sends a player to jail when landing on go-to-jail", () => {
     const base = twoPlayerGame();
     // GOTOJAIL is at index 30; move there directly via a card-free path is hard,

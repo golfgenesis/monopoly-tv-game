@@ -15,19 +15,43 @@
 body {
   margin: 0;
   overflow: hidden;
-  background: #050b1a;
+  background: #02060f;
 }
 button {
   font: inherit;
   cursor: pointer;
+}
+/* Clear focus ring so a Google TV remote (D-pad) shows the selected control. */
+button:focus-visible {
+  outline: 4px solid var(--gold);
+  outline-offset: 3px;
+}
+
+/* --------------------------- TV stage (scale to fit) ---------------------- */
+
+/* The UI is authored at a fixed 1920×1080 canvas (.tv-stage) and scaled
+   uniformly to fill any screen. Couch-distance sizing stays identical on a
+   1080p preview and a 4K 75" TV; only the scale factor changes. */
+.tv-viewport {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(1400px 900px at 50% 0%, #0a1a36, #02060f 70%);
+}
+.tv-stage {
+  position: relative;
+  transform-origin: center center;
+  flex: none;
 }
 
 /* --------------------------------- shell ---------------------------------- */
 
 .tv-root {
   position: relative;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   padding: 22px 22px 18px calc(var(--menu-w) + 18px);
   background:
@@ -275,17 +299,53 @@ button {
   }
 }
 
-.token-stack {
+/* animated token overlay */
+.token-layer {
   position: absolute;
-  left: 1px;
-  bottom: 1px;
-  right: 1px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1px;
-  justify-content: center;
+  inset: 0;
   pointer-events: none;
+  z-index: 6;
 }
+.piece {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 26%;
+  border: 2px solid #fff;
+  color: #fff;
+  line-height: 1;
+  font-weight: 900;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  animation: piece-drop 0.3s ease;
+}
+.piece.current {
+  z-index: 8;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold), 0 6px 14px rgba(0, 0, 0, 0.6);
+  animation: piece-bob 0.9s ease-in-out infinite;
+}
+.piece.jailed {
+  filter: saturate(0.6) brightness(0.85);
+  border-style: dashed;
+}
+@keyframes piece-drop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -120%) scale(0.6);
+  }
+}
+@keyframes piece-bob {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) translateY(0) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) translateY(-12%) scale(1.06);
+  }
+}
+
+/* the token chip used in dock / modals / badges */
 .token {
   display: grid;
   place-items: center;
@@ -297,13 +357,6 @@ button {
   font-size: clamp(7px, 0.6vw, 11px);
   font-weight: 900;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
-  animation: drop 0.35s ease;
-}
-@keyframes drop {
-  from {
-    transform: translateY(-8px) scale(0.6);
-    opacity: 0;
-  }
 }
 
 /* corners */
@@ -505,6 +558,23 @@ button {
 .die-blue i.on {
   background: #2563eb;
 }
+.die.rolling {
+  animation: die-tumble 0.16s steps(2) infinite;
+}
+.die.rolling i {
+  opacity: 0.25;
+}
+@keyframes die-tumble {
+  0% {
+    transform: rotate(-16deg) translateY(0) scale(1.02);
+  }
+  50% {
+    transform: rotate(14deg) translateY(-10%) scale(1.08);
+  }
+  100% {
+    transform: rotate(-10deg) translateY(0) scale(1.02);
+  }
+}
 
 /* --------------------------------- rail ----------------------------------- */
 
@@ -625,6 +695,27 @@ button {
   color: var(--gold);
   word-break: break-all;
 }
+.conn-pill {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+}
+.conn-pill.on {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.5);
+}
 
 /* turn panel */
 .turn-panel {
@@ -743,6 +834,40 @@ button {
   font-size: 16px;
   font-weight: 700;
   color: #cfe6ff;
+}
+.bot-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 10px;
+}
+.bot-btn {
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 13px;
+  border: 0;
+  color: #2a0e4f;
+  font-size: 19px;
+  font-weight: 900;
+  background: linear-gradient(135deg, #c084fc, #a855f7);
+  box-shadow: 0 10px 22px rgba(168, 85, 247, 0.4);
+}
+.bot-btn.ghost {
+  color: #e9d5ff;
+  background: rgba(168, 85, 247, 0.16);
+  border: 1px solid rgba(192, 132, 252, 0.5);
+  box-shadow: none;
+}
+.bot-btn:disabled {
+  opacity: 0.45;
+  background: linear-gradient(135deg, #64748b, #475569);
+  color: #cbd5e1;
+  box-shadow: none;
+}
+.bot-tag {
+  color: #d8b4fe !important;
 }
 .control-panel.actions {
   grid-template-columns: repeat(5, 1fr);
@@ -1280,30 +1405,143 @@ button {
   font-weight: 700;
 }
 
-/* ------------------------------ responsive -------------------------------- */
+/* ------------------------------- settings --------------------------------- */
 
-@media (max-width: 1380px) {
-  body {
-    overflow: auto;
-  }
-  .tv-root {
-    height: auto;
-    min-height: 100vh;
-    padding-left: 18px;
-  }
-  .side-menu {
-    display: none;
-  }
-  .tv-layout {
-    height: auto;
-    grid-template-columns: 1fr;
-  }
-  .board {
-    height: auto;
-    width: 100%;
-  }
-  .player-dock {
-    grid-auto-flow: row;
-    grid-template-columns: repeat(2, 1fr);
+.settings-view {
+  display: grid;
+  gap: 14px;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(125, 211, 252, 0.25);
+}
+.set-row strong {
+  display: block;
+  font-size: 22px;
+  font-weight: 900;
+  color: #fff;
+}
+.set-row small {
+  font-size: 15px;
+  font-weight: 600;
+  color: #9fc3e6;
+}
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  justify-content: center;
+  padding: 12px 18px;
+  border-radius: 14px;
+  font-size: 18px;
+  font-weight: 900;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.18);
+  border: 2px solid rgba(239, 68, 68, 0.5);
+}
+.toggle.on {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.55);
+}
+.zoom-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.zoom-ctl button {
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.5);
+  color: #fff;
+  background: rgba(7, 24, 46, 0.9);
+}
+.zoom-ctl strong {
+  min-width: 70px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 900;
+  color: var(--gold);
+}
+.set-note {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #9fc3e6;
+  text-align: center;
+}
+
+/* --------------------------------- rules ---------------------------------- */
+
+.rules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.rules-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 6px solid var(--gold);
+}
+.rules-list .rn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 900;
+  color: #3b1300;
+  background: linear-gradient(135deg, #facc15, #f59e0b);
+}
+.rules-list div {
+  font-size: 18px;
+  line-height: 1.4;
+  color: #dbeafe;
+  font-weight: 600;
+}
+.rules-list strong {
+  display: block;
+  font-size: 21px;
+  font-weight: 900;
+  color: #fff;
+  margin-bottom: 2px;
+}
+.rules-list em {
+  font-style: normal;
+  font-weight: 900;
+  color: var(--gold);
+}
+
+/* ----------------------------- reduced motion ----------------------------- */
+
+[data-motion="off"] .piece,
+[data-motion="off"] .die,
+[data-motion="off"] .tile.pending,
+[data-motion="off"] .card-modal,
+[data-motion="off"] .auction-modal,
+[data-motion="off"] .trade-modal {
+  animation: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .piece.current {
+    animation: none;
   }
 }

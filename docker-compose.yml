@@ -1,0 +1,12 @@
+# One-shot LAN deploy:  docker compose up -d --build
+# Then open the TV at  http://<this-machine-LAN-IP>:5173
+services:
+  siamsetthi:
+    build: .
+    image: siamsetthi
+    container_name: siamsetthi
+    restart: unless-stopped
+    ports:
+      - "4000:4000" # game server (Socket.IO / WebSocket)
+      - "5173:5173" # TV board screen
+      - "5174:5174" # phone controller

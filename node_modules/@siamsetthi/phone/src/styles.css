@@ -208,6 +208,68 @@ input {
   text-align: center;
 }
 
+/* connection + reconnect */
+.conn-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-left: 8px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+  vertical-align: middle;
+}
+.conn-dot.on {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+}
+.brand .conn-dot {
+  margin-left: auto;
+}
+.offline-banner {
+  padding: 10px 14px;
+  border-radius: 12px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.reconnecting-card {
+  place-items: center;
+  text-align: center;
+  padding: 36px 24px;
+}
+.reconnecting-card h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 900;
+  color: #ffd83a;
+}
+.reconnecting-card p {
+  margin: 0;
+  color: #94a3b8;
+  font-weight: 700;
+}
+.spinner {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 6px solid rgba(148, 197, 255, 0.2);
+  border-top-color: #ffd83a;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.status-card.win .btn {
+  margin-top: 10px;
+  justify-self: center;
+}
+
 /* -------------------------------- topbar ---------------------------------- */
 
 .topbar {

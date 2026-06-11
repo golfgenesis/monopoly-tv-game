@@ -30,6 +30,7 @@ export function createInitialState(roomCode: string): GameState {
     players: [],
     currentPlayerId: null,
     dice: null,
+    rollCount: 0,
     isDoubles: false,
     doublesCount: 0,
     canRoll: false,
@@ -79,6 +80,7 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
       const next = clone(state);
       next.players.push({
         ...action.player,
+        isBot: action.player.isBot ?? false,
         money: STARTING_MONEY,
         position: 0,
         properties: [],
@@ -88,6 +90,17 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
         jailCards: 0
       });
       log(next, `${action.player.name} เข้าห้องแล้ว`, "good");
+      return next;
+    }
+
+    case "removeBot": {
+      if (state.phase !== "lobby") return state;
+      const lastBotIndex = [...state.players].reverse().findIndex((p) => p.isBot);
+      if (lastBotIndex === -1) return state;
+      const idx = state.players.length - 1 - lastBotIndex;
+      const next = clone(state);
+      const [removed] = next.players.splice(idx, 1);
+      if (removed) log(next, `${removed.name} ออกจากห้อง`, "info");
       return next;
     }
 
@@ -256,6 +269,7 @@ function handleRoll(
   if (!player) return state;
 
   next.dice = dice;
+  next.rollCount += 1;
   next.activeCard = null;
   const steps = dice[0] + dice[1];
   const isDoubles = dice[0] === dice[1];
