@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import { io, type Socket } from "socket.io-client";
@@ -32,7 +32,12 @@ import { BOARD, GROUPS, type GameState, type OwnableTile, type Player, type Tile
 import type { ClientToServerEvents, ServerToClientEvents } from "@siamsetthi/shared";
 import "./styles.css";
 
-const serverUrl = import.meta.env.VITE_SERVER_URL ?? `http://${window.location.hostname}:4000`;
+// Single-origin by default: the game server also serves this build, so Socket.IO
+// lives at the same origin (works over LAN and behind a Cloudflare tunnel with
+// wss://). Override with VITE_SERVER_URL only for a split deploy. In dev, Vite
+// proxies /socket.io to the game server (see vite.config.ts).
+const serverUrl = import.meta.env.VITE_SERVER_URL ?? window.location.origin;
+const TV_ROOM_KEY = "siamsetthi.tv.room";
 
 /* ----------------------------- TV stage scaling --------------------------- */
 
@@ -229,7 +234,6 @@ function App() {
   const [state, setState] = useState<GameState | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
-  const [now, setNow] = useState(() => Date.now());
   const [overlay, setOverlay] = useState<null | OverlayKind>(null);
   const [connected, setConnected] = useState(false);
   const [settings, setSettings] = useState<TvSettings>(loadSettings);
@@ -237,6 +241,8 @@ function App() {
   const [cardFlash, setCardFlash] = useState(false);
   const lastEventId = useRef<string | null>(null);
   const lastRollCount = useRef(0);
+  const rollInit = useRef(false);
+  const motionRef = useRef(settings.motion);
   const [rolling, setRolling] = useState(false);
 
   const scale = useStageScale(settings.zoom);
@@ -257,6 +263,7 @@ function App() {
   // Reflect the reduced-motion setting on the document for CSS to key off.
   useEffect(() => {
     document.documentElement.dataset.motion = settings.motion ? "on" : "off";
+    motionRef.current = settings.motion; // read by the roll effect without re-subscribing
   }, [settings.motion]);
 
   // Unlock the AudioContext on the first user gesture (browser autoplay policy).
@@ -272,9 +279,14 @@ function App() {
 
   const joinUrl = useMemo(() => {
     if (!roomCode) return "";
-    // LAN default: phone app on the same host at :5174. For a public deploy set
-    // VITE_PHONE_URL to the phone app's deployed origin (e.g. https://play.example.com).
-    const base = import.meta.env.VITE_PHONE_URL ?? `http://${window.location.hostname}:5174`;
+    // Single-origin default: phone app at <this-origin>/phone. In dev the phone
+    // runs on its own Vite server (:5174). Override with VITE_PHONE_URL for a
+    // split deploy (e.g. https://play.example.com).
+    const base =
+      import.meta.env.VITE_PHONE_URL ??
+      (import.meta.env.DEV
+        ? `${window.location.protocol}//${window.location.hostname}:5174`
+        : `${window.location.origin}/phone`);
     return `${base.replace(/\/+$/, "")}/?room=${roomCode}`;
   }, [roomCode]);
 
@@ -283,15 +295,42 @@ function App() {
     setSocket(next);
     next.on("connect", () => {
       setConnected(true);
-      next.emit("createRoom");
+      // On reconnect / reload, re-attach to the room we were hosting rather than
+      // minting a fresh room (which would strand every joined player). Falls back
+      // to a new room if the server reports it has been reclaimed.
+      const saved = (() => {
+        try {
+          return localStorage.getItem(TV_ROOM_KEY);
+        } catch {
+          return null;
+        }
+      })();
+      if (saved) next.emit("resumeRoom", { roomCode: saved });
+      else next.emit("createRoom");
     });
     next.on("disconnect", () => setConnected(false));
     next.on("roomCreated", ({ roomCode: rc, state: s }) => {
       setRoomCode(rc);
       setState(s);
+      try {
+        localStorage.setItem(TV_ROOM_KEY, rc);
+      } catch {
+        /* ignore */
+      }
     });
     next.on("roomState", ({ state: s }) => setState(s));
-    next.on("errorMessage", (m) => console.warn(m));
+    next.on("errorMessage", (m) => {
+      if (m === "ROOM_GONE") {
+        try {
+          localStorage.removeItem(TV_ROOM_KEY);
+        } catch {
+          /* ignore */
+        }
+        next.emit("createRoom");
+        return;
+      }
+      console.warn(m);
+    });
     return () => {
       next.disconnect();
     };
@@ -312,29 +351,32 @@ function App() {
     }
   }, [state?.events]);
 
-  // Trigger the dice tumble + sound on every fresh roll.
+  // Trigger the dice tumble + sound on every fresh roll. Keyed only on rollCount
+  // so toggling the motion setting mid-roll can't cancel the reset and strand the
+  // dice on "?". The first observed state seeds the counter (skipping the backlog
+  // when a TV joins a game already in progress) without muting the game's 1st roll.
   useEffect(() => {
-    const rc = state?.rollCount ?? 0;
+    if (!state) return;
+    const rc = state.rollCount;
+    if (!rollInit.current) {
+      rollInit.current = true;
+      lastRollCount.current = rc;
+      return;
+    }
     if (rc === lastRollCount.current) return;
-    const isFirst = lastRollCount.current === 0;
     lastRollCount.current = rc;
-    if (isFirst || !state?.dice) return;
+    if (!state.dice) return;
     audio.play("dice");
-    if (!settings.motion) return;
+    if (!motionRef.current) return;
     setRolling(true);
     const t = setTimeout(() => setRolling(false), 620);
     return () => clearTimeout(t);
-  }, [state?.rollCount, settings.motion]);
+  }, [state?.rollCount]);
 
   useEffect(() => {
     if (!joinUrl) return;
     QRCode.toDataURL(joinUrl, { margin: 1, width: 420, color: { dark: "#0b1220", light: "#ffffff" } }).then(setQrDataUrl);
   }, [joinUrl]);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, []);
 
   // Flash the drawn card for a few seconds.
   useEffect(() => {
@@ -351,9 +393,6 @@ function App() {
   const players = state?.players ?? [];
   const currentPlayer = players.find((p) => p.id === state?.currentPlayerId) ?? null;
   const phase = state?.phase ?? "lobby";
-
-  const remaining = state?.turnEndsAt ? Math.max(0, Math.ceil((state.turnEndsAt - now) / 1000)) : null;
-  const timerPct = remaining != null && state ? Math.max(0, Math.min(100, (remaining / state.turnSeconds) * 100)) : 0;
 
   return (
     <div className="tv-viewport">
@@ -384,8 +423,8 @@ function App() {
                 currentPlayer={currentPlayer}
                 dice={state?.dice ?? null}
                 isDoubles={state?.isDoubles ?? false}
-                remaining={remaining}
-                timerPct={timerPct}
+                turnEndsAt={state?.turnEndsAt ?? null}
+                turnSeconds={state?.turnSeconds ?? 30}
                 rolling={rolling}
               />
 
@@ -507,23 +546,37 @@ function InvitePanel({
   );
 }
 
+/** Owns its own 250ms tick so the countdown never re-renders the whole board. */
+function useCountdown(turnEndsAt: number | null, turnSeconds: number) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (turnEndsAt == null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [turnEndsAt]);
+  const remaining = turnEndsAt ? Math.max(0, Math.ceil((turnEndsAt - now) / 1000)) : null;
+  const timerPct = remaining != null ? Math.max(0, Math.min(100, (remaining / turnSeconds) * 100)) : 0;
+  return { remaining, timerPct };
+}
+
 function TurnPanel({
   phase,
   currentPlayer,
   dice,
   isDoubles,
-  remaining,
-  timerPct,
+  turnEndsAt,
+  turnSeconds,
   rolling
 }: {
   phase: GameState["phase"];
   currentPlayer: Player | null;
   dice: [number, number] | null;
   isDoubles: boolean;
-  remaining: number | null;
-  timerPct: number;
+  turnEndsAt: number | null;
+  turnSeconds: number;
   rolling: boolean;
 }) {
+  const { remaining, timerPct } = useCountdown(turnEndsAt, turnSeconds);
   const status =
     phase === "lobby"
       ? "รอผู้เล่นเข้าห้องให้ครบแล้วเริ่มเกม"
@@ -567,9 +620,9 @@ function TurnPanel({
         </div>
       </div>
 
-      <div className="timer">
+      <div className={`timer${remaining != null && remaining <= 8 ? " low" : ""}`}>
         <div className="timer-track">
-          <span style={{ width: `${timerPct}%` }} />
+          <span style={{ ["--p" as string]: timerPct / 100 }} />
         </div>
         <em>
           <Timer size={18} /> เวลาคิด {remaining != null ? remaining : "—"}
@@ -662,7 +715,15 @@ function ControlPanel({
 
 /* ---------------------------------- board --------------------------------- */
 
-function Board({ state, motion, rolling }: { state: GameState | null; motion: boolean; rolling: boolean }) {
+const Board = memo(function Board({
+  state,
+  motion,
+  rolling
+}: {
+  state: GameState | null;
+  motion: boolean;
+  rolling: boolean;
+}) {
   const boardRef = useRef<HTMLDivElement>(null);
   const tileRefs = useRef<(HTMLDivElement | null)[]>([]);
   return (
@@ -684,7 +745,7 @@ function Board({ state, motion, rolling }: { state: GameState | null; motion: bo
       </div>
     </div>
   );
-}
+});
 
 function TileCell({
   tile,
@@ -877,6 +938,7 @@ function TokenLayer({
             height: size,
             fontSize: size * 0.56,
             background: p.color,
+            ["--pc" as string]: p.color,
             transition: motion ? "left .16s linear, top .16s linear" : "none"
           }}
           title={p.name}
@@ -908,6 +970,7 @@ function BoardCenter({ state, rolling }: { state: GameState | null; rolling: boo
           เศรษฐี
           <br />
           สยาม
+          <span className="logo-shine" aria-hidden />
         </h1>
         <strong>เกมซื้อขายที่ดินของคนไทย</strong>
       </div>
@@ -929,7 +992,7 @@ function BoardCenter({ state, rolling }: { state: GameState | null; rolling: boo
 
 /* --------------------------------- dock ----------------------------------- */
 
-function PlayerDock({ state }: { state: GameState | null }) {
+const PlayerDock = memo(function PlayerDock({ state }: { state: GameState | null }) {
   const players = state?.players ?? [];
   const leaderId = players.length
     ? [...players].sort((a, b) => netWorth(state!, b) - netWorth(state!, a))[0]?.id
@@ -977,7 +1040,7 @@ function PlayerDock({ state }: { state: GameState | null }) {
       })}
     </div>
   );
-}
+});
 
 function Avatar({ player, size, star }: { player: Player; size: number; star?: boolean }) {
   return (
@@ -1125,6 +1188,40 @@ function TradeModal({ state }: { state: GameState }) {
   );
 }
 
+const CONFETTI_COLORS = ["#ef4444", "#f97316", "#facc15", "#22c55e", "#38bdf8", "#a855f7", "#ec4899", "#ffd83a"];
+
+/** Bounded confetti burst for the winner screen. Pure transform/opacity — cheap
+ *  even on the TV, and frozen automatically when motion is off. */
+function Confetti() {
+  const bits = useMemo(
+    () =>
+      Array.from({ length: 44 }).map((_, i) => ({
+        left: Math.random() * 100,
+        delay: Math.random() * 0.9,
+        dur: 2.2 + Math.random() * 1.8,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        rot: Math.random() * 360
+      })),
+    []
+  );
+  return (
+    <div className="confetti" aria-hidden>
+      {bits.map((b, i) => (
+        <i
+          key={i}
+          style={{
+            left: `${b.left}%`,
+            background: b.color,
+            animationDuration: `${b.dur}s`,
+            animationDelay: `${b.delay}s`,
+            transform: `rotate(${b.rot}deg)`
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function WinnerModal({
   players,
   winnerId,
@@ -1139,6 +1236,7 @@ function WinnerModal({
   return (
     <div className="card-modal-wrap">
       <div className="winner-modal">
+        <Confetti />
         <Crown size={56} className="crown" />
         <h2>เศรษฐีที่ยิ่งใหญ่!</h2>
         {winner ? (

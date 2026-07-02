@@ -1,6 +1,9 @@
+import { existsSync } from "node:fs";
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import cors from "cors";
 import express from "express";
-import { createServer } from "http";
 import { Server } from "socket.io";
 import {
   BOARD,
@@ -19,12 +22,15 @@ interface Room {
   botActAt: number;
   /** The actor on the clock last tick — detects when it switches to a bot. */
   lastActorId: string | null;
+  /** Epoch ms of the last activity in this room — drives idle GC. */
+  lastActivity: number;
 }
 
 const TURN_MS = 30_000; // think time per turn
 const AUTO_STEP_MS = 1_500; // fast-forward AFK / bankrupt turns
 const BOT_DELAY_MS = 1_200; // pause between bot actions so the table can watch
 const BOT_CASH_RESERVE = 1_500; // cash a bot tries to keep on hand
+const ROOM_TTL_MS = 30 * 60_000; // reclaim rooms idle + empty this long
 
 const BOT_ROSTER = [
   { name: "บอทเฮง", token: "🤖" },
@@ -40,19 +46,72 @@ const app = express();
 app.use(cors());
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true, rooms: rooms.size });
+  response.json({ ok: true, rooms: rooms.size, uptime: process.uptime() });
 });
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>(httpServer, {
-  cors: { origin: "*" }
+  cors: { origin: "*" },
+  // Keep couch clients alive across brief Wi-Fi / tunnel hiccups.
+  pingInterval: 20_000,
+  pingTimeout: 25_000
 });
+
+/* ----------------------- single-origin static hosting --------------------- */
+// In production the game server also serves the built TV + phone SPAs, so the
+// whole app lives behind ONE origin/port. That makes it trivial to expose via a
+// Cloudflare Tunnel (one hostname, same-origin wss://) and removes any need to
+// publish extra host ports. In dev the Vite servers handle the frontends, so
+// this block is a no-op (the dist folders don't exist yet).
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const TV_DIST = join(ROOT, "apps/tv/dist");
+const PHONE_DIST = join(ROOT, "apps/phone/dist");
+
+if (existsSync(join(TV_DIST, "index.html"))) {
+  const tvIndex = join(TV_DIST, "index.html");
+  const phoneIndex = join(PHONE_DIST, "index.html");
+  // Static assets (immutable hashed files first, so real files win over fallback).
+  app.use("/phone", express.static(PHONE_DIST));
+  app.use(express.static(TV_DIST));
+  // SPA fallback: phone routes → phone shell, everything else → TV shell.
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    const p = req.path;
+    if (p.startsWith("/socket.io") || p === "/health") return next();
+    res.sendFile(p === "/phone" || p.startsWith("/phone/") ? phoneIndex : tvIndex);
+  });
+  console.log(`[static] serving TV at "/" and phone at "/phone" from ${dirname(tvIndex)}`);
+} else {
+  console.log("[static] no built frontends found — dev mode (Vite serves them)");
+}
 
 io.on("connection", (socket) => {
   socket.on("createRoom", () => {
     const roomCode = createRoomCode();
-    const room: Room = { state: createInitialState(roomCode), botActAt: 0, lastActorId: null };
+    const room: Room = {
+      state: createInitialState(roomCode),
+      botActAt: 0,
+      lastActorId: null,
+      lastActivity: Date.now()
+    };
     rooms.set(roomCode, room);
+    socket.data.roomCode = roomCode;
+    socket.data.role = "tv";
+    socket.join(roomCode);
+    socket.emit("roomCreated", { roomCode, state: room.state });
+  });
+
+  // TV reconnect / reload: re-attach to its existing room instead of orphaning
+  // every player by minting a brand-new room. Falls back to a fresh room if the
+  // old one has been reclaimed.
+  socket.on("resumeRoom", (payload) => {
+    const roomCode = payload.roomCode.trim().toUpperCase();
+    const room = rooms.get(roomCode);
+    if (!room) {
+      socket.emit("errorMessage", "ROOM_GONE");
+      return;
+    }
+    room.lastActivity = Date.now();
     socket.data.roomCode = roomCode;
     socket.data.role = "tv";
     socket.join(roomCode);
@@ -85,6 +144,7 @@ io.on("connection", (socket) => {
         avatar: payload.avatar
       }
     });
+    room.lastActivity = Date.now();
     socket.data.roomCode = roomCode;
     socket.data.playerId = playerId;
     socket.data.role = "phone";
@@ -105,6 +165,7 @@ io.on("connection", (socket) => {
       socket.emit("errorMessage", "ไม่พบผู้เล่นเดิมในห้องนี้");
       return;
     }
+    room.lastActivity = Date.now();
     socket.data.roomCode = roomCode;
     socket.data.playerId = player.id;
     socket.data.role = "phone";
@@ -115,22 +176,27 @@ io.on("connection", (socket) => {
   socket.on("hostStartGame", (payload) => {
     const room = rooms.get(payload.roomCode);
     if (!room) return socket.emit("errorMessage", "ไม่พบห้อง");
+    if (socket.data.roomCode !== payload.roomCode) return; // only participants of this room
     room.state = reduceGameState(room.state, { type: "startGame" });
     stampTurn(room, TURN_MS);
+    room.lastActivity = Date.now();
     broadcast(payload.roomCode);
   });
 
   socket.on("hostResetGame", (payload) => {
     const room = rooms.get(payload.roomCode);
     if (!room) return;
+    if (socket.data.roomCode !== payload.roomCode) return;
     room.state = reduceGameState(room.state, { type: "resetGame" });
     room.state.turnEndsAt = null;
+    room.lastActivity = Date.now();
     broadcast(payload.roomCode);
   });
 
   socket.on("hostAddBot", (payload) => {
     const room = rooms.get(payload.roomCode);
     if (!room) return;
+    if (socket.data.roomCode !== payload.roomCode) return;
     if (room.state.phase !== "lobby" || room.state.players.length >= 6) return;
     const usedColors = new Set(room.state.players.map((p) => p.color));
     const botCount = room.state.players.filter((p) => p.isBot).length;
@@ -147,22 +213,30 @@ io.on("connection", (socket) => {
         isBot: true
       }
     });
+    room.lastActivity = Date.now();
     broadcast(payload.roomCode);
   });
 
   socket.on("hostRemoveBot", (payload) => {
     const room = rooms.get(payload.roomCode);
     if (!room) return;
+    if (socket.data.roomCode !== payload.roomCode) return;
     room.state = reduceGameState(room.state, { type: "removeBot" });
+    room.lastActivity = Date.now();
     broadcast(payload.roomCode);
   });
 
   socket.on("playerAction", (payload) => {
     const room = rooms.get(payload.roomCode);
     if (!room) return socket.emit("errorMessage", "ไม่พบห้อง");
+    // Only the socket that owns a player id may act as that player (anti-cheat).
+    if (socket.data.role === "phone" && socket.data.playerId && socket.data.playerId !== payload.playerId) {
+      return;
+    }
     const action = normalizeAction(payload.playerId, payload.action);
     room.state = reduceGameState(room.state, action);
     stampTurn(room, TURN_MS);
+    room.lastActivity = Date.now();
     broadcast(payload.roomCode);
   });
 });
@@ -200,6 +274,18 @@ setInterval(() => {
   }
 }, 500);
 
+// Idle-room reclaim: drop rooms that have been empty (no connected sockets) and
+// untouched for a while so a long-running server doesn't leak memory.
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomCode, room] of rooms) {
+    const sockets = io.sockets.adapter.rooms.get(roomCode)?.size ?? 0;
+    if (sockets === 0 && now - room.lastActivity > ROOM_TTL_MS) {
+      rooms.delete(roomCode);
+    }
+  }
+}, 60_000);
+
 const port = Number(process.env.PORT ?? 4000);
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`Siam Setthi server listening on http://0.0.0.0:${port}`);
@@ -230,6 +316,7 @@ function autoStep(room: Room, roomCode: string): void {
 
   const actedActor = action.playerId;
   room.state = reduceGameState(state, action);
+  room.lastActivity = Date.now();
   // Whoever must act next: auction bidder, trade recipient, or the turn player.
   const next = room.state;
   const nextActor = next.auction
@@ -278,6 +365,7 @@ function botStep(room: Room, roomCode: string): void {
   if (!action) return;
   room.state = reduceGameState(room.state, action);
   stampTurn(room, TURN_MS);
+  room.lastActivity = Date.now();
   broadcast(roomCode);
 }
 

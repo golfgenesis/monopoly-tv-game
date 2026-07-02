@@ -208,7 +208,8 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
       return handleMortgage(state, action.playerId, action.tileId, false);
 
     case "payJail": {
-      if (state.currentPlayerId !== action.playerId) return state;
+      // Only at the jail decision point (before the escape roll is spent).
+      if (state.currentPlayerId !== action.playerId || !state.canRoll) return state;
       const next = clone(state);
       const player = byId(next, action.playerId);
       if (!player || !player.inJail || player.money < JAIL_FINE) return state;
@@ -220,7 +221,7 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
     }
 
     case "useJailCard": {
-      if (state.currentPlayerId !== action.playerId) return state;
+      if (state.currentPlayerId !== action.playerId || !state.canRoll) return state;
       const next = clone(state);
       const player = byId(next, action.playerId);
       if (!player || !player.inJail || player.jailCards < 1) return state;
@@ -415,15 +416,13 @@ function applyCard(next: GameState, player: Player, card: CardEffect, draw: numb
     }
     case "payEach": {
       const amount = card.amount ?? 0;
-      const recipients = next.players.filter((o) => o.id !== player.id && o.status === "active");
-      const total = amount * recipients.length;
-      if (player.money < total) {
-        charge(next, player, total, null);
-        return;
-      }
-      for (const other of recipients) {
-        player.money -= amount;
-        other.money += amount;
+      // Pay each active opponent individually. If the payer can't cover everyone,
+      // charge() hands their remaining cash to the current recipient and bankrupts
+      // them — the money always goes to the players, never silently to the bank.
+      for (const other of next.players) {
+        if (other.id === player.id || other.status !== "active") continue;
+        charge(next, player, amount, other.id);
+        if (player.status !== "active") break;
       }
       return;
     }
@@ -443,6 +442,9 @@ function applyCard(next: GameState, player: Player, card: CardEffect, draw: numb
 
 function handleBuild(state: GameState, playerId: string, tileId: string, delta: 1 | -1): GameState {
   if (state.currentPlayerId !== playerId) return state;
+  // No building while an auction/trade is open (would let the actor drain cash
+  // out from under an in-flight bid or offer).
+  if (state.auction || state.trade) return state;
   const tile = BOARD.find((t) => t.id === tileId);
   if (!tile || tile.kind !== "property") return state;
   const next = clone(state);
@@ -477,6 +479,7 @@ function handleBuild(state: GameState, playerId: string, tileId: string, delta: 
 
 function handleMortgage(state: GameState, playerId: string, tileId: string, on: boolean): GameState {
   if (state.currentPlayerId !== playerId) return state;
+  if (state.auction || state.trade) return state;
   const tile = BOARD.find((t) => t.id === tileId);
   if (!tile || !isOwnable(tile)) return state;
   const next = clone(state);
@@ -564,13 +567,18 @@ function openAuction(next: GameState, tileId: string): void {
 
 function handleBid(state: GameState, playerId: string, amount: number): GameState {
   const a = state.auction;
-  if (!a || a.currentBidderId !== playerId || amount <= a.highBid) return state;
+  if (!a || a.currentBidderId !== playerId) return state;
+  // Reject malformed / non-finite / non-increasing bids (anti-cheat: never let a
+  // NaN bid slip past the cash guard and poison the auction + player money).
+  if (!Number.isFinite(amount)) return state;
+  const bid = Math.floor(amount);
+  if (bid <= a.highBid) return state;
   const next = clone(state);
   const player = byId(next, playerId);
-  if (!player || player.money < amount) return state;
-  next.auction!.highBid = amount;
+  if (!player || player.money < bid) return state;
+  next.auction!.highBid = bid;
   next.auction!.highBidderId = playerId;
-  log(next, `${player.name} ประมูล ฿${amount.toLocaleString()}`, "info");
+  log(next, `${player.name} ประมูล ฿${bid.toLocaleString()}`, "info");
   advanceAuction(next);
   return next;
 }
@@ -733,12 +741,20 @@ function charge(next: GameState, player: Player, amount: number, creditorId: str
 function bankrupt(next: GameState, player: Player, creditor: Player | null): void {
   log(next, `💥 ${player.name} ล้มละลาย!`, "bad");
   for (const tileId of [...player.properties]) {
-    delete next.buildings[tileId];
     if (creditor) {
+      // Buildings are sold back to the bank at half price and the cash goes to
+      // the creditor (standard Monopoly); the bare land then transfers over.
+      const houses = next.buildings[tileId] ?? 0;
+      const tile = BOARD.find((t) => t.id === tileId);
+      if (houses > 0 && tile && isOwnable(tile)) {
+        creditor.money += Math.round(tile.houseCost / 2) * houses;
+      }
+      delete next.buildings[tileId];
       next.ownership[tileId] = creditor.id;
       creditor.properties.push(tileId);
       // Creditor inherits mortgaged status; keep it as-is.
     } else {
+      delete next.buildings[tileId];
       delete next.ownership[tileId];
       delete next.mortgaged[tileId];
     }

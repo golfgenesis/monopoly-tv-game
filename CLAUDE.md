@@ -21,9 +21,11 @@ npm run build --workspace @siamsetthi/tv
 npm run dev   --workspace @siamsetthi/server
 ```
 
-Dev ports: TV `5173`, phone `5174`, server `4000`. This is **npm workspaces**, not pnpm (ignore the pnpm wording in `docs/superpowers/plans/`).
+Dev ports: TV `5173`, phone `5174`, server `4000`. This is **npm workspaces**, not pnpm (ignore the pnpm wording in `docs/superpowers/plans/`). In dev the Vite servers proxy `/socket.io` → `:4000`, so clients talk to the server **same-origin** (matching prod).
 
-**Docker (LAN one-shot):** `docker compose up -d --build` runs all three in one container (`Dockerfile` + `scripts/docker-start.sh` + dep-free `scripts/static.mjs` serving the built frontends; server via `tsx`). No env needed — frontends resolve the server from `window.location.hostname:4000`.
+**Single-origin (prod/Docker):** the server (`apps/server`) also serves the built SPAs — TV at `/`, phone at `/phone` (built with `base=/phone/`), Socket.IO at `/socket.io` — all on **one port** (`PORT`, default 4000). Clients default to `window.location.origin` for the socket (override with `VITE_SERVER_URL`). This is what makes the Cloudflare-tunnel deploy trivial (one hostname, `wss://`).
+
+**Docker (Cloudflare tunnel one-shot):** `.env` (`TUNNEL_TOKEN=…`, gitignored) + `docker compose up -d --build` runs the `app` container (server serving everything, no host ports published) plus `cloudflared`. Point the tunnel's public hostname at `http://app:4000`. `scripts/docker-start.sh` just runs the server via `tsx`; the old `scripts/static.mjs` is unused now.
 
 **Auto-deploy:** `scripts/auto-deploy.sh` (git-poll → pull → redeploy) + `scripts/install-auto-deploy.sh` (systemd service+timer, unit name `siamsetthi-auto-deploy`). Same pattern as the `f:\home` project. Lock + log-rotate + dirty/ahead safety guards. Deploy step defaults to `docker compose up -d --build`, override with `AUTO_DEPLOY_CMD`.
 

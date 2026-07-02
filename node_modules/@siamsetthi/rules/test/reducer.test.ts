@@ -176,4 +176,108 @@ describe("เศรษฐีสยาม board rules", () => {
     const state = reduceGameState(staged, { type: "rollDice", playerId: "p1", dice: [1, 0] as [number, number], draw: 0 });
     expect(state.players[0].inJail).toBe(true);
   });
+
+  it("pays a 'pay each player' shortfall to the opponent, not the bank", () => {
+    const base = twoPlayerGame();
+    // p1 short on cash lands on comm-2 (index 17) and draws m-treat (payEach ฿150).
+    // draw 0.55 → COMMUNITY_DECK[5] = m-treat. Only opponent is p2.
+    const staged: GameState = {
+      ...base,
+      currentPlayerId: "p1",
+      players: base.players.map((p) => (p.id === "p1" ? { ...p, position: 16, money: 100 } : p))
+    };
+    const state = reduceGameState(staged, {
+      type: "rollDice",
+      playerId: "p1",
+      dice: [1, 0] as [number, number],
+      draw: 0.55
+    });
+    expect(state.activeCard?.id).toBe("m-treat");
+    // p1 can't cover ฿150 → hands remaining ฿100 to p2 (the creditor), then bankrupts.
+    expect(state.players[0].status).toBe("bankrupt");
+    expect(state.players[1].money).toBe(15000 + 100);
+  });
+
+  it("credits the creditor for razed buildings on bankruptcy (not bare land)", () => {
+    const base = twoPlayerGame();
+    const staged: GameState = {
+      ...base,
+      currentPlayerId: "p1",
+      ownership: { banglamphu: "p1", sampheng: "p1", khaosan: "p2" },
+      buildings: { banglamphu: 1, sampheng: 1 },
+      players: base.players.map((p) =>
+        p.id === "p1"
+          ? { ...p, position: 8, money: 50, properties: ["banglamphu", "sampheng"] }
+          : { ...p, properties: ["khaosan"] }
+      )
+    };
+    // p1 → khaosan (owned by p2, base rent 80) with only ฿50 → bankrupt to p2.
+    const state = reduceGameState(staged, {
+      type: "rollDice",
+      playerId: "p1",
+      dice: [1, 0] as [number, number],
+      draw: 0
+    });
+    expect(state.players[0].status).toBe("bankrupt");
+    // p2 gets p1's ฿50 + half-cost sellback of 2 houses (2 × ฿250) = +฿550.
+    expect(state.players[1].money).toBe(15000 + 50 + 500);
+    expect(state.ownership["banglamphu"]).toBe("p2");
+    expect(state.buildings["banglamphu"]).toBeUndefined();
+  });
+
+  it("rejects a non-finite (NaN) auction bid but accepts a valid one", () => {
+    let state = twoPlayerGame();
+    state = reduceGameState(state, { type: "rollDice", playerId: "p1", dice: [1, 2], draw: 0 });
+    state = reduceGameState(state, { type: "skipBuy", playerId: "p1" });
+    expect(state.auction?.currentBidderId).toBe("p1");
+    const rejected = reduceGameState(state, { type: "bidAuction", playerId: "p1", amount: Number.NaN });
+    expect(rejected).toBe(state); // unchanged
+    const ok = reduceGameState(state, { type: "bidAuction", playerId: "p1", amount: 100 });
+    expect(ok.auction?.highBid).toBe(100);
+  });
+
+  it("blocks building while an auction is open", () => {
+    const base = twoPlayerGame();
+    const staged: GameState = {
+      ...base,
+      currentPlayerId: "p1",
+      ownership: { banglamphu: "p1", sampheng: "p1" },
+      players: base.players.map((p) =>
+        p.id === "p1" ? { ...p, position: 5, money: 20000, properties: ["banglamphu", "sampheng"] } : p
+      )
+    };
+    // land on yaowarat (unowned) → decline → auction opens
+    let state = reduceGameState(staged, {
+      type: "rollDice",
+      playerId: "p1",
+      dice: [1, 0] as [number, number],
+      draw: 0
+    });
+    expect(state.pendingPurchaseTileId).toBe("yaowarat");
+    state = reduceGameState(state, { type: "skipBuy", playerId: "p1" });
+    expect(state.auction).not.toBeNull();
+    const blocked = reduceGameState(state, { type: "buildHouse", playerId: "p1", tileId: "banglamphu" });
+    expect(blocked).toBe(state); // building refused mid-auction
+  });
+
+  it("only allows jail pay/card at the decision point (before the escape roll)", () => {
+    const base = twoPlayerGame();
+    const staged: GameState = {
+      ...base,
+      currentPlayerId: "p1",
+      players: base.players.map((p) => (p.id === "p1" ? { ...p, inJail: true, position: 10, money: 5000 } : p))
+    };
+    // Before rolling: paying bail works and lets the player then roll to move.
+    const paid = reduceGameState(staged, { type: "payJail", playerId: "p1" });
+    expect(paid.players[0].inJail).toBe(false);
+    expect(paid.players[0].money).toBe(5000 - 500);
+    expect(paid.canRoll).toBe(true);
+
+    // After a failed (non-doubles) escape roll, canRoll is spent → pay is refused.
+    const failed = reduceGameState(staged, { type: "rollDice", playerId: "p1", dice: [1, 2], draw: 0 });
+    expect(failed.canRoll).toBe(false);
+    const afterRoll = reduceGameState(failed, { type: "payJail", playerId: "p1" });
+    expect(afterRoll).toBe(failed); // refused
+    expect(afterRoll.players[0].inJail).toBe(true);
+  });
 });

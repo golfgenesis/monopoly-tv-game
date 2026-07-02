@@ -32,7 +32,9 @@ import {
 import type { ClientToServerEvents, ServerToClientEvents } from "@siamsetthi/shared";
 import "./styles.css";
 
-const serverUrl = import.meta.env.VITE_SERVER_URL ?? `http://${window.location.hostname}:4000`;
+// Same-origin by default (single-origin server / Cloudflare tunnel). Override
+// with VITE_SERVER_URL for a split deploy. In dev, Vite proxies /socket.io.
+const serverUrl = import.meta.env.VITE_SERVER_URL ?? window.location.origin;
 
 interface Character {
   key: string;

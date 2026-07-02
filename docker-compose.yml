@@ -1,12 +1,40 @@
-# One-shot LAN deploy:  docker compose up -d --build
-# Then open the TV at  http://<this-machine-LAN-IP>:5173
+# เศรษฐีสยาม — one-command deploy, exposed to the internet via a Cloudflare Tunnel.
+#
+#   1) put your tunnel token in .env   ->   TUNNEL_TOKEN=eyJ...
+#   2) docker compose up -d --build
+#   3) in Cloudflare Zero Trust → Networks → Tunnels → (your tunnel) → Public Hostname,
+#      point your hostname at the service:  http://app:4000
+#
+# No host ports are published — the game is reachable ONLY through the tunnel, so
+# it can never collide with anything else already listening on the Ubuntu box.
 services:
-  siamsetthi:
+  app:
     build: .
     image: siamsetthi
     container_name: siamsetthi
     restart: unless-stopped
-    ports:
-      - "4000:4000" # game server (Socket.IO / WebSocket)
-      - "5173:5173" # TV board screen
-      - "5174:5174" # phone controller
+    environment:
+      - PORT=4000
+    expose:
+      - "4000" # internal only (visible to cloudflared on the shared network)
+    networks:
+      - siamnet
+    # To ALSO allow direct LAN play, uncomment and pick a free host port:
+    # ports:
+    #   - "18080:4000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: siamsetthi-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env (see .env.example)}
+    depends_on:
+      - app
+    networks:
+      - siamnet
+
+networks:
+  siamnet:
+    driver: bridge

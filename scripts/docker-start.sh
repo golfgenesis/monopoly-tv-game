@@ -1,10 +1,8 @@
 #!/bin/sh
-# Run all three services in one container (LAN play).
-#   :4000  game server (Socket.IO)   :5173  TV board   :5174  phone controller
+# Single-origin runtime: the game server serves the built TV + phone SPAs AND
+# the Socket.IO endpoint on ONE port (default 4000). No extra static servers,
+# no extra ports — ideal behind a Cloudflare tunnel.
 set -e
-
-node scripts/static.mjs apps/tv/dist 5173 &
-node scripts/static.mjs apps/phone/dist 5174 &
 
 # Locate the tsx binary regardless of how npm hoisted it.
 if [ -x ./node_modules/.bin/tsx ]; then
@@ -15,5 +13,4 @@ else
   TSX="npx tsx"
 fi
 
-# Game server in the foreground so it owns the container lifecycle.
 exec $TSX apps/server/src/index.ts
