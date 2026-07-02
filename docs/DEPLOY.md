@@ -38,14 +38,17 @@ docker compose up -d --build
 
 **3) ผูก hostname เข้ากับบริการ** (ทำครั้งเดียวใน Cloudflare Dashboard):
 Zero Trust → **Networks → Tunnels → (tunnel ของคุณ) → Public Hostname → Add**
-- **Subdomain/Domain:** เลือกโดเมนของคุณ (เช่น `play.example.com`)
-- **Service:** `HTTP`  →  `app:4000`   ← ชื่อ service ใน compose คือ `app`
+- **Subdomain/Domain:** เลือกโดเมนของคุณ (เช่น `monopoly.example.com`)
+- **Service:** `HTTP`  →  `localhost:3308`
 
-เท่านั้น! เปิด **`https://play.example.com`** บนทีวี, สแกน QR → มือถือเด้งไป `https://play.example.com/phone/?room=...` เอง
+> `cloudflared` รันใน network namespace เดียวกับ container เกม (`network_mode: service:app`
+> ใน `docker-compose.yml`) ดังนั้น `localhost:3308` = ตัวเกมโดยตรง — **ค่า port ต้องตรงกัน**
+> ระหว่าง dashboard (`localhost:3308`) กับ `PORT` ใน compose
+
+เท่านั้น! เปิด **`https://monopoly.example.com`** บนทีวี, สแกน QR → มือถือเด้งไป `https://monopoly.example.com/phone/?room=...` เอง
 
 > **ทำไมพอร์ตไม่ชน:** `docker-compose.yml` ไม่ได้ `publish` พอร์ตใดๆ ออก host เลย
-> เกมฟังอยู่ที่ `4000` **ภายใน** Docker network ชื่อ `siamnet` และ `cloudflared` ต่อผ่าน DNS
-> ภายใน (`http://app:4000`) → บนเครื่อง Ubuntu ไม่มีพอร์ตใหม่ถูกเปิดเลย
+> เกมฟังอยู่ที่ `3308` **ภายใน** container namespace → บนเครื่อง Ubuntu ไม่มีพอร์ตใหม่ถูกเปิดเลย
 
 ### คำสั่งที่ใช้บ่อย
 ```bash
@@ -57,7 +60,7 @@ docker compose up -d --build        # อัปเดตโค้ดใหม่
 ```
 
 ### อยากเล่น LAN ด้วย (นอกจาก tunnel)
-แก้ `docker-compose.yml` เอา comment ออกที่ `ports:` แล้วเลือกพอร์ต host ที่ว่าง เช่น `18080:4000`
+แก้ `docker-compose.yml` เอา comment ออกที่ `ports:` แล้วเลือกพอร์ต host ที่ว่าง เช่น `18080:3308`
 จากนั้นเปิดทีวีที่ `http://<ip-ubuntu>:18080` ได้ (ตรวจพอร์ตว่างด้วย `ss -tlnp`)
 
 ---
@@ -67,7 +70,7 @@ docker compose up -d --build        # อัปเดตโค้ดใหม่
 อยากเล่นในบ้านอย่างเดียว เปิดพอร์ต host ตัวเดียว:
 
 ```bash
-# แก้ docker-compose.yml: เอา comment ออกที่ ports: - "18080:4000"
+# แก้ docker-compose.yml: เอา comment ออกที่ ports: - "18080:3308"
 docker compose up -d --build
 # เปิดทีวี:  http://<ip-ubuntu>:18080     (มือถือสแกน QR เด้งไป /phone เอง)
 hostname -I   # หา ip เครื่อง
@@ -126,6 +129,6 @@ tail -f scripts/auto-deploy.log
 
 ## สรุปสั้น
 
-- **เล่นข้ามเน็ต + พอร์ตไม่ชน** → Cloudflare Tunnel: `.env` + `docker compose up -d --build` + ตั้ง public hostname → `http://app:4000` ⭐
-- เล่น LAN → เปิด `ports: 18080:4000` ใน compose
+- **เล่นข้ามเน็ต + พอร์ตไม่ชน** → Cloudflare Tunnel: `.env` + `docker compose up -d --build` + ตั้ง public hostname → `http://localhost:3308` ⭐
+- เล่น LAN → เปิด `ports: 18080:3308` ใน compose
 - dev → `npm run dev`

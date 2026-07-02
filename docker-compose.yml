@@ -2,11 +2,14 @@
 #
 #   1) put your tunnel token in .env   ->   TUNNEL_TOKEN=eyJ...
 #   2) docker compose up -d --build
-#   3) in Cloudflare Zero Trust → Networks → Tunnels → (your tunnel) → Public Hostname,
-#      point your hostname at the service:  http://app:4000
+#
+# The tunnel's Public Hostname (set in the Cloudflare Zero Trust dashboard) points
+# at  http://localhost:3308 . cloudflared shares the app container's network
+# namespace (network_mode: service:app), so "localhost:3308" IS the game server.
 #
 # No host ports are published — the game is reachable ONLY through the tunnel, so
 # it can never collide with anything else already listening on the Ubuntu box.
+# NOTE: APP_PORT must match the port in your dashboard Public Hostname service URL.
 services:
   app:
     build: .
@@ -14,14 +17,12 @@ services:
     container_name: siamsetthi
     restart: unless-stopped
     environment:
-      - PORT=4000
+      - PORT=3308 # must match the tunnel Public Hostname service (http://localhost:3308)
     expose:
-      - "4000" # internal only (visible to cloudflared on the shared network)
-    networks:
-      - siamnet
-    # To ALSO allow direct LAN play, uncomment and pick a free host port:
+      - "3308" # internal only — shared with cloudflared via its network namespace
+    # To ALSO allow direct LAN play, publish a free host port, e.g.:
     # ports:
-    #   - "18080:4000"
+    #   - "18080:3308"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -30,11 +31,8 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env (see .env.example)}
+    # Share the app's netns so the dashboard's http://localhost:3308 reaches it.
+    network_mode: "service:app"
     depends_on:
-      - app
-    networks:
-      - siamnet
-
-networks:
-  siamnet:
-    driver: bridge
+      app:
+        condition: service_healthy
